@@ -9,8 +9,14 @@ const store = new Map<string, string>()
 
 class FakeRedis {
   static shouldFailConnection = false
+  // Issue #348: lets tests inspect the options the module passed to ioredis
+  // (retryStrategy) and drive connection events on the live instance.
+  static instances: FakeRedis[] = []
+  static lastOptions: { retryStrategy?: (times: number) => number | null | undefined } | undefined
 
-  constructor(_url: string, _opts?: unknown) {
+  constructor(_url: string, opts?: { retryStrategy?: (times: number) => number | null | undefined }) {
+    FakeRedis.instances.push(this)
+    FakeRedis.lastOptions = opts
     if (FakeRedis.shouldFailConnection) {
       // Simulate a client that immediately errors on first use, the way a
       // refused connection would.
@@ -26,8 +32,12 @@ class FakeRedis {
     return this
   }
 
+  emit(event: string, arg?: unknown): void {
+    for (const cb of this.listeners[event] ?? []) cb(arg)
+  }
+
   private emitError(): void {
-    for (const cb of this.listeners.error ?? []) cb(new Error('ECONNREFUSED (fake)'))
+    this.emit('error', new Error('ECONNREFUSED (fake)'))
   }
 
   async get(key: string): Promise<string | null> {
@@ -64,6 +74,8 @@ describe('cache/redis', () => {
     vi.resetModules()
     store.clear()
     FakeRedis.shouldFailConnection = false
+    FakeRedis.instances = []
+    FakeRedis.lastOptions = undefined
   })
 
   afterEach(() => {
@@ -161,5 +173,58 @@ describe('cache/redis', () => {
     const fetcher = vi.fn().mockResolvedValue({ ok: true })
     await expect(getOrSetCache('some-key', 30, fetcher)).resolves.toEqual({ ok: true })
     expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps reconnecting with a capped backoff instead of giving up (issue #348)', async () => {
+    vi.doMock('../src/config.js', () => ({
+      config: { cache: { redisUrl: 'redis://fake:6379', memberCacheTtlSeconds: 30 } },
+    }))
+    const { getOrSetCache } = await import('../src/cache/redis.js')
+    await getOrSetCache('members:list:50', 30, vi.fn().mockResolvedValue([]))
+
+    const retryStrategy = FakeRedis.lastOptions?.retryStrategy
+    expect(retryStrategy).toBeTypeOf('function')
+    expect(retryStrategy!(1)).toBe(200)
+    expect(retryStrategy!(5)).toBe(1000)
+    // Never null (that would stop reconnection for good), and never above the cap.
+    expect(retryStrategy!(1000)).toBe(5000)
+  })
+
+  it('resumes caching after a Redis restart and logs the next outage again (issue #348)', async () => {
+    vi.doMock('../src/config.js', () => ({
+      config: { cache: { redisUrl: 'redis://fake:6379', memberCacheTtlSeconds: 30 } },
+    }))
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { getOrSetCache } = await import('../src/cache/redis.js')
+      // The shared client is created lazily on first use, so warm it up first.
+      await getOrSetCache('warm', 30, vi.fn().mockResolvedValue(1))
+      const redis = FakeRedis.instances[0]
+
+      // First outage: fallback to fetcher, logged once.
+      FakeRedis.shouldFailConnection = true
+      const fetcher = vi.fn().mockResolvedValue({ n: 2 })
+      await getOrSetCache('members:list:50', 30, fetcher)
+      await getOrSetCache('members:list:50', 30, fetcher)
+      expect(fetcher).toHaveBeenCalledTimes(2)
+      expect(errorSpy).toHaveBeenCalledTimes(1)
+
+      // Redis returns: ioredis emits `ready`, which re-arms the log-once flag.
+      FakeRedis.shouldFailConnection = false
+      redis.emit('ready')
+      await getOrSetCache('members:list:50', 30, fetcher)
+      expect(store.has('members:list:50')).toBe(true)
+      // Cache hits resume: the fetcher is not called again.
+      const cached = await getOrSetCache('members:list:50', 30, fetcher)
+      expect(cached).toEqual({ n: 2 })
+      expect(fetcher).toHaveBeenCalledTimes(3)
+
+      // Second outage is logged again, not swallowed by the earlier one.
+      FakeRedis.shouldFailConnection = true
+      await getOrSetCache('members:list:50', 30, fetcher)
+      expect(errorSpy).toHaveBeenCalledTimes(2)
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 })

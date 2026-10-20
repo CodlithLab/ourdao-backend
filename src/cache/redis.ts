@@ -10,9 +10,13 @@ import { config } from '../config.js'
 // a latency/DB-load optimization, never a dependency the API or indexer can
 // fail on.
 
+// Upper bound on the delay between reconnect attempts (issue #348).
+const MAX_RECONNECT_DELAY_MS = 5000
+
 let client: Redis | null = null
 // Logged once so a Redis outage doesn't spam the log for every request that
-// falls back to Postgres — see `logConnectionFailureOnce` below.
+// falls back to Postgres — see `logConnectionFailureOnce` below. Cleared
+// again on reconnect, so each outage is logged once.
 let loggedConnectionFailure = false
 
 function logConnectionFailureOnce(err: unknown): void {
@@ -40,13 +44,22 @@ function getClient(): Redis | null {
     // aren't used here because ioredis connects on first command by default,
     // which is exactly the "no connection attempted until actually needed"
     // behavior this module wants.
-    retryStrategy: () => null, // don't keep reconnecting in a hot loop
+    // Issue #348: keep reconnecting with a capped backoff. Returning `null`
+    // here used to stop ioredis for good after the first lost connection,
+    // leaving the cache dead until the process restarted.
+    retryStrategy: (times) => Math.min(times * 200, MAX_RECONNECT_DELAY_MS),
   })
 
   client.on('error', (err) => {
     // Issue #277: a background connection error must never crash the API or
     // indexer process — log once, keep going uncached.
     logConnectionFailureOnce(err)
+  })
+
+  client.on('ready', () => {
+    // Issue #348: connection is back, so the next outage is a new incident
+    // and must be logged again.
+    loggedConnectionFailure = false
   })
 
   return client
