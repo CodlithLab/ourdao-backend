@@ -39,6 +39,13 @@ Entries that affect deployment or runtime state are annotated:
 - **Duplicate migration version 22**: `0022_auth_nonces_rekey.sql` renumbered `0024` and annotated breaking; it no longer fails with `relation "auth_nonces_expires_at_idx" already exists` on a database that predates it **[Migration: 0024_auth_nonces_rekey.sql]**. Swagger/OpenAPI registration restored in `buildServer`.
 - **`withLoanDerived`** no longer throws on a malformed amount: the row's `interest_charge`/`repaid_amount` are `null` instead of a `500` for the whole list; a test asserts every `NUMERIC` column keeps scale zero (#195).
 - **Duplicate migration version 21**: `0021_quarantine_state.sql` renumbered `0023` **[Migration: 0023_quarantine_state.sql]**. `schema.sql` now includes `quarantine_state` and the 0022 `failed_events` uniqueness, and the quarantine-state upsert no longer references an invalid column.
+- **`/ready` no longer reports a cold start when the indexer state query fails**: only a missing table (SQLSTATE `42P01`) is treated as a cold start. A timeout, dropped connection or permission error on the `indexer_cursor` or `reorg_halts` read now answers `503` with `reason: postgres_error` (#347).
+- **Redis cache reconnects after an outage**: the client retries with a capped backoff (at most 5s between attempts) instead of giving up after the first lost connection, and each new outage is logged again. Previously the cache stayed off until the API restarted (#348).
+- **`main` builds a container image again**: the `Dockerfile` was stored as one base64 line since #305, so no image could be built. It is restored to plain text (#341, #350).
+- **Mutation-testing job fails when Stryker fails**: `continue-on-error` is removed from the weekly `mutation.yml` run, so a broken or missing Stryker install no longer shows a green check (#349).
+
+### Changed
+- **Node.js 22 is the supported runtime**: the container image is `node:22-alpine` (digest-pinned), `engines.node` is `>=22`, and CI tests Node 22 and 24. Node 20 is end-of-life and is no longer tested or shipped (#350).
 
 ---
 
