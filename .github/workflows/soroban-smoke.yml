@@ -1,5 +1,8 @@
 name: Soroban RPC Smoke Test
 
+permissions:
+  contents: read
+
 # Scheduled and on-demand smoke test verifying real Soroban RPC response shapes (#206).
 # Excluded from PRs to avoid public testnet rate limits and latency blocking merges.
 on:
@@ -42,9 +45,9 @@ jobs:
       CONTRACT_ID: ${{ inputs.contract_id || '' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.0.2
         with:
           node-version: 20
           cache: npm

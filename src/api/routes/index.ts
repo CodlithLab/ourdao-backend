@@ -1053,11 +1053,13 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
   // `indexer/replay.ts`'s `replayFailedEvent` — added for `npm run
   // replay-failed` (issue #170) — this route is the HTTP door onto it.
   //
-  // Same "operator diagnostics, no auth scheme" posture as
-  // GET /admin/failed-events above: reachable without authentication, but a
-  // still-failing replay's raw exception text is never echoed back (only
-  // logged, by replayFailedEvent itself) — mirroring classifyError's rule.
+  // Issue #291: requires authentication to write to admin_audit_log.
   app.post<{ Params: { id: string } }>('/admin/failed-events/:id/re-evaluate', async (req, reply) => {
+    const auth = await authenticateRequest(req.headers, nonceStore, undefined, req.log)
+    if (!auth.authenticated) {
+      return reply.code(auth.status).send({ error: auth.error || 'Authentication required' })
+    }
+
     const eventId = req.params.id.trim()
     if (!eventId) return reply.code(400).send({ error: 'invalid event id' })
 
@@ -1065,6 +1067,9 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     // own statusCode; classifyError formats it) or any other unexpected
     // throw (falls through to a generic 500, message withheld).
     const outcome = await replayFailedEvent(eventId)
+
+    void writeAuditLog(auth.address, 'resolve_quarantined_event', req.ip ?? null, { eventId, status: outcome.status }, req.log)
+
     if (outcome.status === 'still_failing') {
       return reply.code(422).send({ eventId: outcome.eventId, status: outcome.status })
     }
@@ -1079,8 +1084,14 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
   // silently excluded from the count rather than erroring the whole batch,
   // since a stale/duplicate id in an admin's list shouldn't block resolving
   // the rest.
+  // Issue #291: requires authentication to write to admin_audit_log.
   const MAX_BATCH_RESOLVE_IDS = 500
   app.post('/admin/failed-events/batch-resolve', async (req, reply) => {
+    const auth = await authenticateRequest(req.headers, nonceStore, undefined, req.log)
+    if (!auth.authenticated) {
+      return reply.code(auth.status).send({ error: auth.error || 'Authentication required' })
+    }
+
     const body = req.body as { ids?: unknown; resolution?: unknown; note?: unknown }
     const ids = body.ids
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -1110,6 +1121,8 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
       )
       return result.rowCount ?? 0
     })
+
+    void writeAuditLog(auth.address, 'resolve_quarantined_event', req.ip ?? null, { ids, resolution, note: note ?? null, resolved: resolvedCount }, req.log)
 
     return { resolved: resolvedCount }
   })

@@ -1,5 +1,8 @@
 name: Database Backup Verification
 
+permissions:
+  contents: read
+
 on:
   schedule:
     # Run weekly on Mondays at 02:00 UTC
@@ -22,10 +25,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.0
 
       - name: Set up Docker
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v3.6.0
 
       - name: Install PostgreSQL client
         run: |
@@ -113,7 +116,7 @@ jobs:
 
       - name: Upload verification logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.3.1
         with:
           name: verification-logs
           path: |
