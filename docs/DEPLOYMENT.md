@@ -75,6 +75,8 @@ docker run --env-file .env ourdao-backend node dist/worker.js
 docker run --env-file .env ourdao-backend node dist/indexer/reindex.js
 ```
 
+The supported Node.js runtime is **22** (the `node:22-alpine` base image, `.node-version`, and the `engines.node` field in `package.json`). Node 20 reached end-of-life in April 2026 and is no longer supported (issue #350). CI tests Node 22 and 24.
+
 The image runs as the non-root `node` user with `tini` as PID 1. `tini` handles signal forwarding and zombie reaping — both are required for the worker's graceful shutdown to work. The `HEALTHCHECK` targets `GET /health` (a no-DB liveness check) rather than `/ready` (which does a DB round-trip and reports `503` when the indexer is behind — useful as a readiness probe in an orchestrator, not a container health signal).
 
 **Do not run the worker with a health check that restarts it on `503` from `/ready`.** If the indexer falls behind for any reason (RPC hiccup, a slow page), `/ready` returns `503` and a health check targeting it would kill and restart the worker in a loop, losing its place and creating exactly the restart storm that compounds the problem. Use `/health` for container health and `/ready` as a readiness/load-balancer probe on the API only.
@@ -427,7 +429,7 @@ Versions `0011` and `0014` are unused (gaps are allowed; see the loader in `src/
 
 To guarantee build reproducibility and protect the production environment against base-image vulnerabilities:
 
-- **Pinned Digest Base Image**: The `Dockerfile` pins the base image by immutable SHA256 digest (`node:20-alpine@sha256:...`) rather than a mutable floating tag. Dependabot monitors Docker ecosystem updates weekly and opens PRs when updated digests are available.
+- **Pinned Digest Base Image**: The `Dockerfile` pins the base image by immutable SHA256 digest (`node:22-alpine@sha256:...`) rather than a mutable floating tag. Dependabot monitors Docker ecosystem updates weekly and opens PRs when updated digests are available.
 - **Vulnerability Scanning**: In CI, the `docker-build` job automatically scans the built container image with Trivy.
 - **Failure Policy**: Builds fail on any detected `HIGH` or `CRITICAL` severity vulnerability with available fixes.
 - **Allowlist Policy**: If an upstream vulnerability cannot yet be patched or represents an acceptable risk, it must be documented in [`.trivyignore`](../.trivyignore) including the CVE ID, explanation, upstream tracking link, and an expiration date.

@@ -6,7 +6,7 @@ This document explains how to retrieve and use the Software Bill of Materials (S
 
 A Software Bill of Materials (SBOM) is a comprehensive inventory of all software components, dependencies, and packages included in an application or container image. For `ourdao-backend`, the SBOM includes:
 
-- **Base image contents** (Alpine Linux packages from `node:20-alpine`)
+- **Base image contents** (Alpine Linux packages from `node:22-alpine`)
 - **npm dependencies** (both direct and transitive)
 - **Application code** (the `ourdao-backend` package itself)
 
@@ -124,22 +124,22 @@ This is useful when a security advisory names a specific package and you need to
 
 ## Base Image Pinning
 
-The Dockerfile pins the base image (`node:20-alpine`) by **digest** rather than tag (issue #219):
+The Dockerfile pins the base image (`node:22-alpine`) by **digest** rather than tag (issue #219):
 
 ```dockerfile
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS build
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS build
 ```
 
 **Why digest pinning matters for SBOMs:**
 
-- A tag like `node:20-alpine` can point to different images over time (new Alpine packages, new Node.js patch release)
+- A tag like `node:22-alpine` can point to different images over time (new Alpine packages, new Node.js patch release)
 - A digest (`sha256:...`) is immutable—it always refers to the exact same bytes
 - The SBOM describes the packages in a specific image; pinning by digest ensures the SBOM matches the deployed image exactly
 
 **To update the base image:**
 
-1. Pull the latest `node:20-alpine`: `docker pull node:20-alpine`
-2. Get its digest: `docker image inspect node:20-alpine --format '{{.RepoDigests}}'`
+1. Pull the latest `node:22-alpine`: `docker pull node:22-alpine`
+2. Get its digest: `docker image inspect node:22-alpine --format '{{.RepoDigests}}'`
 3. Update the `FROM` lines in the Dockerfile with the new digest
 4. Rebuild—the SBOM will reflect the new base image contents
 
