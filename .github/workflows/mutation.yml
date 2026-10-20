@@ -36,15 +36,16 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
         run: npm ci
 
+      # Issue #349: no continue-on-error — a failing or missing Stryker run must
+      # fail the job instead of showing a green check that proves nothing.
       - name: Run mutation testing (Stryker)
         run: npx stryker run
-        continue-on-error: true
 
       - name: Upload mutation report
         uses: actions/upload-artifact@v4
