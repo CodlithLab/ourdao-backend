@@ -110,4 +110,53 @@ describe('API: fail-soft readiness', () => {
       spy.mockRestore()
     }
   })
+
+  // Issue #347: only a missing table (SQLSTATE 42P01) is a cold start. Every
+  // other cursor/halt read failure must report 503 instead of `ready`.
+  it('returns 503 postgres_error when the indexer cursor query fails for a non-missing-table reason', async () => {
+    const timeout = Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' })
+    const spy = vi
+      .spyOn(pool, 'query')
+      .mockResolvedValueOnce({ rows: [{ '?column?': 1 }] } as never) // SELECT 1
+      .mockRejectedValueOnce(timeout) // indexer_cursor
+    try {
+      const res = await app.inject({ method: 'GET', url: '/ready' })
+      expect(res.statusCode).toBe(503)
+      expect(res.json()).toEqual({ status: 'not ready', reason: 'postgres_error' })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('returns 503 postgres_error when the reorg halt query fails, rather than hiding a recorded halt (issue #347)', async () => {
+    const denied = Object.assign(new Error('permission denied for table reorg_halts'), { code: '42501' })
+    const spy = vi
+      .spyOn(pool, 'query')
+      .mockResolvedValueOnce({ rows: [{ '?column?': 1 }] } as never) // SELECT 1
+      .mockResolvedValueOnce({ rows: [{ last_ledger: 100, observed_tip_ledger: 100, updated_at: new Date().toISOString() }] } as never) // indexer_cursor
+      .mockRejectedValueOnce(denied) // reorg_halts
+    try {
+      const res = await app.inject({ method: 'GET', url: '/ready' })
+      expect(res.statusCode).toBe(503)
+      expect(res.json()).toEqual({ status: 'not ready', reason: 'postgres_error' })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('still treats genuinely missing tables as a cold start (issue #347)', async () => {
+    const undefinedTable = Object.assign(new Error('relation "indexer_cursor" does not exist'), { code: '42P01' })
+    const spy = vi
+      .spyOn(pool, 'query')
+      .mockResolvedValueOnce({ rows: [{ '?column?': 1 }] } as never) // SELECT 1
+      .mockRejectedValueOnce(undefinedTable) // indexer_cursor
+      .mockRejectedValueOnce(undefinedTable) // reorg_halts
+    try {
+      const res = await app.inject({ method: 'GET', url: '/ready' })
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toMatchObject({ status: 'ready', indexer: 'cold_start' })
+    } finally {
+      spy.mockRestore()
+    }
+  })
 })

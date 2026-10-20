@@ -229,7 +229,7 @@ Base path: `/api`.
 **Core endpoints:**
 
 - `GET /health` — Liveness check + currently configured contract id (no DB round trip)
-- `GET /ready` — Readiness probe (checks Postgres reachability and indexer freshness; a recorded ledger discontinuity answers `503` with `reason: reorg_detected`, see [Reorg detection](#reorg-detection))
+- `GET /ready` — Readiness probe (checks Postgres reachability and indexer freshness; a recorded ledger discontinuity answers `503` with `reason: reorg_detected`, see [Reorg detection](#reorg-detection); a failing indexer-state query other than a missing table answers `503` with `reason: postgres_error`, issue #347)
 - `GET /version` — Build metadata (version, commit, build date)
 - `GET /api/stats` — Aggregate DAO statistics (members, loans, proposals, money figures, quarantine count, indexer state, and `reorgDetected`/`reorgHalt` for an uncleared ledger discontinuity)
 - `GET /api/stats/history` — Daily loan principal lent/repaid, defaults, defaulted value, and cumulative default rate (`data` timeseries; money values are decimal strings)

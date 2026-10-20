@@ -33,6 +33,16 @@ interface CursorRow {
   updated_at: string | null
 }
 
+// Postgres SQLSTATE 42P01 (undefined_table). Issue #347: `/ready` only treats
+// this as "the table was never created" — any other failure (statement
+// timeout, dropped connection, permission error) leaves the indexer state
+// unknown and must not read as a cold start.
+const PG_UNDEFINED_TABLE = '42P01'
+
+function isUndefinedTable(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === PG_UNDEFINED_TABLE
+}
+
 interface PackageJson {
   version: string
 }
@@ -324,7 +334,7 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
   })
 
   // ── Readiness probe (issue #2) — checks DB + indexer freshness ──
-  app.get('/ready', async (_req, reply) => {
+  app.get('/ready', async (req, reply) => {
     // 1. Postgres reachable, and within a bounded time (issue #167). The
     // `catch` below only ever sees the query itself fail (refused, auth
     // error) — it never fired for a *hung* database, since `pool.query`
@@ -363,7 +373,14 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
       row = await pool
         .query<CursorRow>('SELECT last_ledger, observed_tip_ledger, updated_at FROM indexer_cursor ORDER BY updated_at ASC NULLS FIRST LIMIT 1')
         .then((r) => r.rows[0] ?? null)
-    } catch {
+    } catch (err) {
+      // Issue #347: a failing cursor read is not a cold start unless the table
+      // is genuinely missing — otherwise the orchestrator routes traffic to an
+      // instance whose indexer state is unknown.
+      if (!isUndefinedTable(err)) {
+        req.log.error({ err }, '/ready: indexer cursor query failed')
+        return reply.code(503).send({ status: 'not ready', reason: 'postgres_error' })
+      }
       // Table may not exist yet — treat as cold start
     }
 
@@ -378,8 +395,14 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
           'SELECT contract_id, last_ledger, detail, detected_at FROM reorg_halts WHERE cleared_at IS NULL ORDER BY id DESC LIMIT 1'
         )
         .then((r) => r.rows[0] ?? null)
-    } catch {
-      // Table may not exist yet on a database that predates migration 0030.
+    } catch (err) {
+      // Issue #347: a failing halt read could hide a recorded reorg, which is
+      // exactly what this endpoint exists to report — so only a missing table
+      // (a database that predates migration 0030) is tolerated.
+      if (!isUndefinedTable(err)) {
+        req.log.error({ err }, '/ready: reorg halt query failed')
+        return reply.code(503).send({ status: 'not ready', reason: 'postgres_error' })
+      }
     }
     if (halt) {
       return reply.code(503).send({
