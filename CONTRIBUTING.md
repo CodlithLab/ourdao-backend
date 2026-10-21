@@ -71,7 +71,7 @@ Two more checks CI runs that aren't in the list above:
 - **It includes a test that would fail without your change.** For a bug fix, that means a regression test that reproduces the bug. "The existing tests still pass" is the floor, not the bar.
 - **Its tests hit a real database, not a mock.** Follow the pattern in the existing suites.
 - **It doesn't reformat code you didn't change.**
-- **Its description explains why, not just what.**
+- **Its description explains why, not just what.** Implementation summary and completion status belong in the PR description on GitHub, not in committed files — write the narrative there instead (see issue #185).
 - **It updates CHANGELOG.md for user-visible changes.** Any pull request that alters an API response, adds or alters a route, introduces a database migration, or requires an operator action (e.g. reindex) must include an entry under the `[Unreleased]` section of [CHANGELOG.md](./CHANGELOG.md), explicitly marking `[Migration: <file>]` or `[Requires Reindex]` as applicable.
 - **CI is green** before you request review.
 - **Pull requests require review from code owners.** Changes to `src/indexer/`, `src/auth.ts`, and `src/db/migrations/` have stricter review requirements enforced by GitHub's CODEOWNERS file. Wait for the required review before merging.
