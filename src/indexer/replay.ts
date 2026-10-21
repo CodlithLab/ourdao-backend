@@ -83,7 +83,14 @@ export type ReplayOutcome =
  * inserted — so retrying a still-broken handler doesn't inflate the
  * quarantine count.
  */
-export async function replayFailedEvent(eventId: string): Promise<ReplayOutcome> {
+export async function replayFailedEvent(
+  eventId: string,
+  optionsOrResolution?: 'resolved' | 'ignored' | { resolution?: 'resolved' | 'ignored' }
+): Promise<ReplayOutcome> {
+  const resolution: 'resolved' | 'ignored' =
+    typeof optionsOrResolution === 'string'
+      ? optionsOrResolution
+      : (optionsOrResolution?.resolution ?? 'resolved')
   const client: PoolClient = await pool.connect()
   let lockAcquired = false
   let notifyChannel: StreamChannel | undefined
@@ -123,9 +130,10 @@ export async function replayFailedEvent(eventId: string): Promise<ReplayOutcome>
       // since re-processed it some other way. Nothing to re-apply; just
       // catch the bookkeeping up (issue #119's folded_at is the source of
       // truth for "needs folding", not the failed_events row).
+      // Issue #395: record resolution alongside resolved_at
       await client.query(
-        `UPDATE failed_events SET resolved_at = now() WHERE event_id = $1 AND resolved_at IS NULL`,
-        [eventId]
+        `UPDATE failed_events SET resolved_at = now(), resolution = $2 WHERE event_id = $1 AND resolved_at IS NULL`,
+        [eventId, resolution]
       )
       return { eventId, status: 'already_resolved' }
     }
@@ -136,9 +144,10 @@ export async function replayFailedEvent(eventId: string): Promise<ReplayOutcome>
       await client.query('BEGIN')
       const channel = await applyEvent(client, ev)
       await markFolded(client, ev.id)
+      // Issue #395: record resolution alongside resolved_at
       await client.query(
-        `UPDATE failed_events SET resolved_at = now() WHERE event_id = $1 AND resolved_at IS NULL`,
-        [eventId]
+        `UPDATE failed_events SET resolved_at = now(), resolution = $2 WHERE event_id = $1 AND resolved_at IS NULL`,
+        [eventId, resolution]
       )
       await client.query('COMMIT')
       notifyChannel = channel

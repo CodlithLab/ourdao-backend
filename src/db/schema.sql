@@ -274,18 +274,18 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Persistent quarantine escalation state (issues #172, #174); see
--- migrations/0023_quarantine_state.sql. Singleton row, not derived: never
--- truncated by npm run reindex.
+-- Persistent quarantine escalation state (issues #172, #174, #384); see
+-- migrations/0023_quarantine_state.sql and 0033_multi_contract_quarantine_state.sql.
+-- Keyed per contract_id, not derived: never truncated by npm run reindex.
 CREATE TABLE IF NOT EXISTS quarantine_state (
-  id        SMALLINT PRIMARY KEY DEFAULT 1,
-  page_key  TEXT,
+  contract_id   TEXT PRIMARY KEY,
+  id            SMALLINT DEFAULT 1,
+  page_key      TEXT,
   error_message TEXT,
-  failures  INT NOT NULL DEFAULT 1,
-  escalated_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT single_row CHECK (id = 1)
+  failures      INT NOT NULL DEFAULT 1,
+  escalated_at  TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS quarantine_state_escalated_at_idx ON quarantine_state (escalated_at);
 

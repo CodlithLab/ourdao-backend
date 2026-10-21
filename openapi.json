@@ -548,6 +548,20 @@
         }
       }
     },
+    "/api/admin/clear-reorg": {
+      "post": {
+        "summary": "Clear reorg halt",
+        "tags": [
+          "admin"
+        ],
+        "description": "Acknowledges a recorded ledger discontinuity without rebuilding. Clears uncleared reorg halts and records the action into admin_audit_log (issue #402).",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
     "/api/admin/audit-log": {
       "get": {
         "responses": {

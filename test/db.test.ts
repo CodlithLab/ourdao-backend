@@ -1,5 +1,5 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { query } from '../src/db/index.js'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { pool, query, withTransaction } from '../src/db/index.js'
 import { closeDb, resetDb } from './db.js'
 
 describe('test db harness', () => {
@@ -44,5 +44,55 @@ describe('test db harness', () => {
     )
     expect(rows[0]?.joined_ledger).toBe(4200000)
     expect(typeof rows[0]?.joined_ledger).toBe('number')
+  })
+
+  // Issue #401: withTransaction must not mask original error if ROLLBACK throws
+  it('rolls back and rethrows original error on transaction failure', async () => {
+    const error = new Error('simulated failure inside transaction')
+    await expect(
+      withTransaction(async (client) => {
+        await client.query("INSERT INTO members (address, contribution) VALUES ('GFAIL', 100)")
+        throw error
+      })
+    ).rejects.toThrow('simulated failure inside transaction')
+
+    const rows = await query("SELECT * FROM members WHERE address = 'GFAIL'")
+    expect(rows).toHaveLength(0)
+  })
+
+  it('preserves the original error and attaches rollback failure when ROLLBACK throws', async () => {
+    const originalError = new Error('Original query execution failed')
+    const rollbackError = new Error('Connection terminated unexpectedly')
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const mockClient = {
+      query: vi.fn(async (sql: string) => {
+        if (sql === 'BEGIN') return
+        if (sql === 'ROLLBACK') throw rollbackError
+        throw new Error(`Unexpected query: ${sql}`)
+      }),
+      release: vi.fn(),
+    }
+
+    vi.spyOn(pool, 'connect').mockImplementationOnce(async () => mockClient as unknown as import('pg').PoolClient)
+
+    let caughtError: unknown
+    try {
+      await withTransaction(async () => {
+        throw originalError
+      })
+    } catch (err) {
+      caughtError = err
+    }
+
+    expect(caughtError).toBe(originalError)
+    expect((caughtError as Error).cause).toBe(rollbackError)
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[db] transaction rollback failed:',
+      rollbackError
+    )
+    expect(mockClient.release).toHaveBeenCalled()
+
+    consoleSpy.mockRestore()
   })
 })

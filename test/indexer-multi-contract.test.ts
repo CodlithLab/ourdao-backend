@@ -1,7 +1,7 @@
 // Issue #289: one indexer process tailing more than one Soroban contract at
 // once, each with its own independent cursor row keyed by contract_id.
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { pool, query } from '../src/db/index.js'
+import { pool, query, queryOne } from '../src/db/index.js'
 import { assertContractsConfigured, resolveConfig } from '../src/config.js'
 import { fetchOnce } from '../src/indexer/poller.js'
 import { closeDb, resetDb } from './db.js'
@@ -95,6 +95,81 @@ describe('indexer: multi-contract event tailing (issue #289)', () => {
     // B never got far enough to write a cursor row at all — the whole-page
     // transaction rolled back below the quarantine threshold.
     expect(await cursorFor('CCONTRACT_B')).toBeNull()
+  })
+
+  // Issue #384: quarantine state must be tracked per contract_id so contract B polling
+  // does not wipe or reset contract A's failure accumulation
+  it('independent quarantine state: successful poll on contract B does not reset contract A failures', async () => {
+    const badA = decodedEvent('loan_dflt', { loan_id: 1, borrower: 'GA' })
+    const goodA = decodedEvent('joined', { member: 'GA_GOOD', fee: '10' })
+    const pageA = [badA, goodA]
+
+    const eventB1 = decodedEvent('joined', { member: 'GB1', fee: '20' })
+    const eventB2 = decodedEvent('joined', { member: 'GB2', fee: '30' })
+
+    // Cycle 1: Contract A fails (failures = 1)
+    getEventsMock.mockResolvedValueOnce({ events: pageA, cursor: 'tok-a-1', latestLedger: 100_000 })
+    await expect(fetchOnce('CCONTRACT_A')).rejects.toThrow(/penalty/)
+
+    let stateA = await queryOne<{ failures: number; page_key: string | null }>(
+      'SELECT failures, page_key FROM quarantine_state WHERE contract_id = $1',
+      ['CCONTRACT_A']
+    )
+    expect(stateA?.failures).toBe(1)
+
+    // Contract B polls successfully (must NOT reset Contract A)
+    getEventsMock.mockResolvedValueOnce({ events: [eventB1], cursor: 'tok-b-1', latestLedger: 100_000 })
+    await fetchOnce('CCONTRACT_B')
+
+    stateA = await queryOne<{ failures: number; page_key: string | null }>(
+      'SELECT failures, page_key FROM quarantine_state WHERE contract_id = $1',
+      ['CCONTRACT_A']
+    )
+    expect(stateA?.failures).toBe(1)
+
+    // Cycle 2: Contract A fails again (failures = 2)
+    getEventsMock.mockResolvedValueOnce({ events: pageA, cursor: 'tok-a-1', latestLedger: 100_000 })
+    await expect(fetchOnce('CCONTRACT_A')).rejects.toThrow(/penalty/)
+
+    stateA = await queryOne<{ failures: number; page_key: string | null }>(
+      'SELECT failures, page_key FROM quarantine_state WHERE contract_id = $1',
+      ['CCONTRACT_A']
+    )
+    expect(stateA?.failures).toBe(2)
+
+    // Contract B polls successfully again
+    getEventsMock.mockResolvedValueOnce({ events: [eventB2], cursor: 'tok-b-2', latestLedger: 100_000 })
+    await fetchOnce('CCONTRACT_B')
+
+    stateA = await queryOne<{ failures: number; page_key: string | null }>(
+      'SELECT failures, page_key FROM quarantine_state WHERE contract_id = $1',
+      ['CCONTRACT_A']
+    )
+    expect(stateA?.failures).toBe(2)
+
+    // Cycle 3: Contract A fails 3rd time -> triggers quarantine mode and folds the page
+    getEventsMock.mockResolvedValueOnce({ events: pageA, cursor: 'tok-a-1', latestLedger: 100_000 })
+    await expect(fetchOnce('CCONTRACT_A')).resolves.toBeUndefined()
+
+    // Bad event quarantined
+    const failed = await query<{ symbol: string }>('SELECT symbol FROM failed_events')
+    expect(failed).toHaveLength(1)
+    expect(failed[0]?.symbol).toBe('loan_dflt')
+
+    // Good event folded
+    const membersA = await query<{ address: string }>('SELECT address FROM members WHERE address = $1', ['GA_GOOD'])
+    expect(membersA).toHaveLength(1)
+
+    // Contract B folded events also present
+    const membersB = await query<{ address: string }>('SELECT address FROM members WHERE address IN ($1, $2) ORDER BY address', ['GB1', 'GB2'])
+    expect(membersB).toHaveLength(2)
+
+    // Contract A quarantine state page_key was reset
+    stateA = await queryOne<{ failures: number; page_key: string | null }>(
+      'SELECT failures, page_key FROM quarantine_state WHERE contract_id = $1',
+      ['CCONTRACT_A']
+    )
+    expect(stateA?.page_key).toBeNull()
   })
 
   it('resetForContractChange wipes every tailed contract\'s cursor row, not just one', async () => {

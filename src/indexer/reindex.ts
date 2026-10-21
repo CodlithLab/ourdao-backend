@@ -164,14 +164,15 @@ export async function reindexFromEventLog(options?: ReindexOptions): Promise<{ e
       }
     }
 
-    // Issue #168: a reindex re-applies every raw event through the same
+    // Issue #168, #395: a reindex re-applies every raw event through the same
     // `applyEvent` a previously-quarantined event failed in. If we got this
     // far, every event in the log — including any that's already recorded
     // in `failed_events` — just folded without throwing, in this same
     // transaction. So any record still unresolved is, as of this commit,
     // repaired: mark it rather than delete it, so the failure history (what
     // failed and why) survives, but stop counting it as a live problem.
-    await client.query(`UPDATE failed_events SET resolved_at = now() WHERE resolved_at IS NULL`)
+    // Set resolution = 'resolved' alongside resolved_at = now() (issue #395).
+    await client.query(`UPDATE failed_events SET resolved_at = now(), resolution = 'resolved' WHERE resolved_at IS NULL`)
 
     // Issue #191: a completed rebuild is the recovery from a detected
     // discontinuity, so clear the recorded halt in the same transaction —
