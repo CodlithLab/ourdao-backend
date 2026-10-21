@@ -3,6 +3,12 @@ import type { FastifyInstance } from 'fastify'
 import { buildServer } from '../src/api/server.js'
 import { config } from '../src/config.js'
 import { pool, query } from '../src/db/index.js'
+import {
+  notifyStreamClientsAfterCommit,
+  PG_NOTIFY_MAX_PAYLOAD_BYTES,
+  resetNotificationFailureCountForTests,
+  STREAM_CHANNELS,
+} from '../src/api/stream.js'
 import { closeDb, resetDb } from './db.js'
 
 describe('API: proposals, stats, events, admin/log', () => {
@@ -117,6 +123,27 @@ describe('API: proposals, stats, events, admin/log', () => {
       expect(third.json()).toEqual(first.json())
     } finally {
       spy.mockRestore()
+    }
+  })
+
+  it('cached /api/stats responses reflect live notificationFailures (issue #382)', async () => {
+    resetNotificationFailureCountForTests()
+    const first = await app.inject({ method: 'GET', url: '/api/stats' })
+    expect(first.json().notificationFailures).toBe(0)
+
+    // An oversized payload is refused and counted without touching the DB.
+    await notifyStreamClientsAfterCommit(STREAM_CHANNELS.members, { blob: 'x'.repeat(PG_NOTIFY_MAX_PAYLOAD_BYTES + 1) })
+
+    const spy = vi.spyOn(pool, 'query')
+    try {
+      const cached = await app.inject({ method: 'GET', url: '/api/stats' })
+      // Served from cache: no recompute queries were issued.
+      expect(spy).not.toHaveBeenCalled()
+      expect(cached.json().notificationFailures).toBe(1)
+      expect({ ...cached.json(), notificationFailures: 0 }).toEqual(first.json())
+    } finally {
+      spy.mockRestore()
+      resetNotificationFailureCountForTests()
     }
   })
 
