@@ -1505,11 +1505,15 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
   }, async (_req, reply): Promise<DAOStats | { error: string }> => {
     const ttl = config.http.statsCacheMs
     setCachePolicy(reply, 'public-live')
-    // Issue #156: connectedStreams is live process state — always refresh it
-    // even when the rest of the stats payload is served from the short cache.
-    const liveStreams = getConnectedStreamCount()
+    // Issue #156 / #382: connectedStreams and notificationFailures are live
+    // process state — always refresh them even when the rest of the stats
+    // payload is served from the short cache.
+    const live = {
+      connectedStreams: getConnectedStreamCount(),
+      notificationFailures: getNotificationFailureCount(),
+    }
     if (statsCache && Date.now() - statsCache.at < ttl) {
-      return { ...statsCache.value, connectedStreams: liveStreams }
+      return { ...statsCache.value, ...live }
     }
 
     // Stats is an aggregate over several tables and is the only request type
@@ -1521,7 +1525,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
       const result = await statsGate.run(async () => {
         const value = await computeStats()
         statsCache = { at: Date.now(), value }
-        return { ...value, connectedStreams: liveStreams }
+        return { ...value, ...live }
       })
       return result
     } catch (err) {
@@ -1535,7 +1539,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
       if (statsCache) {
         app.log.warn({ err }, 'stats recompute failed; serving stale cached value')
         reply.header('X-Data-Stale', 'true')
-        return { ...statsCache.value, connectedStreams: liveStreams }
+        return { ...statsCache.value, ...live }
       }
       throw err
     }
