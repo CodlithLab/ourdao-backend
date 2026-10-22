@@ -167,8 +167,12 @@ export class NonceStoreCapacityError extends Error {
 }
 
 // Nonce storage interface - in production this would use Redis or similar
+export interface LoggerLike {
+  debug(msg: string): void
+}
+
 export interface NonceStore {
-  issue(address: string, logger?: AuthLogger): Promise<string>
+  issue(address: string, log?: LoggerLike): Promise<string>
   consume(address: string, nonce: string): Promise<boolean>
   shutdown(): Promise<void>
 }
@@ -231,10 +235,22 @@ export class MemoryNonceStore implements NonceStore {
     }
   }
 
-  async issue(address: string, logger?: AuthLogger): Promise<string> {
-    // Check if we're at overall capacity to prevent DoS
-    if (this.store.size >= this.maxEntries) {
-      throw new NonceStoreCapacityError()
+  async issue(address: string, log?: LoggerLike): Promise<string> {
+    const now = Date.now()
+    
+    // Check if we already have an unexpired nonce for this address
+    const existingEntry = this.store.get(address)
+    if (existingEntry) {
+      if (existingEntry.expiresAt > now) {
+        // Nonce is still valid - return existing one
+        // This prevents an attacker from invalidating a victim's nonce
+        // and also prevents self-invalidation from multiple tabs
+        log?.debug(`[auth] Returning existing nonce for ${address}, expires in ${Math.floor((existingEntry.expiresAt - now) / 1000)}s`)
+        return existingEntry.nonce
+      } else {
+        // Nonce has expired, clean it up
+        this.store.delete(address)
+      }
     }
 
     // Check per-address nonce limit (issue #180)
@@ -335,17 +351,20 @@ export class PostgresNonceStore implements NonceStore {
     }
   }
 
-  async issue(address: string, logger?: AuthLogger): Promise<string> {
-    const counts = await this.pool.query<{ total: string; address_total: string }>(
-      `SELECT
-         COUNT(*) FILTER (WHERE expires_at > now()) AS total,
-         COUNT(*) FILTER (WHERE expires_at > now() AND address = $1) AS address_total
-       FROM auth_nonces`,
+  async issue(address: string, log?: LoggerLike): Promise<string> {
+    // First, check if there's an existing unexpired nonce
+    const existingResult = await this.pool.query(
+      `SELECT nonce FROM auth_nonces 
+       WHERE address = $1 AND expires_at > now()`,
       [address]
     )
-    const count = counts.rows[0]
-    if (count && Number(count.total) >= config.db.nonceMaxEntries) {
-      throw new NonceStoreCapacityError()
+    
+    if (existingResult.rows.length > 0) {
+      // Nonce is still valid - return existing one
+      // This prevents an attacker from invalidating a victim's nonce
+      // and also prevents self-invalidation from multiple tabs
+      log?.debug(`[auth] Returning existing nonce for ${address}`)
+      return existingResult.rows[0].nonce
     }
     if (count && Number(count.address_total) >= MAX_NONCES_PER_ADDRESS) {
       throw new NonceStoreCapacityError(`Too many outstanding nonces for ${truncateAddress(address)}`)
