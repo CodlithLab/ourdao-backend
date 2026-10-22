@@ -22,6 +22,7 @@ import {
   shutdownSharedListener,
   streamLimits,
 } from '../src/api/stream.js'
+import { channelMap } from '../src/indexer/handlers.js'
 import type { FastifyReply } from 'fastify'
 
 // A minimal fake of the pieces of FastifyReply StreamClient actually uses, so
@@ -121,8 +122,17 @@ describe('API: /api/stream', () => {
       treasury_proposals: 'treasury_proposals_changed',
       interest: 'interest_changed',
     })
+
     expect('notifications' in STREAM_CHANNELS).toBe(false)
     expect(Object.values(STREAM_CHANNELS)).not.toContain('notifications_changed')
+  })
+
+  it('maps cataloged loan and treasury events to their stream channels', () => {
+    expect(channelMap.loan_rpy).toBe(STREAM_CHANNELS.loans)
+    expect(channelMap.loan_dflt).toBe(STREAM_CHANNELS.loans)
+    for (const symbol of ['tre_prop', 'tre_vote', 'tre_exec', 'committed', 'revealed']) {
+      expect(channelMap[symbol]).toBe(STREAM_CHANNELS.treasury_proposals)
+    }
   })
 
   it('multiple concurrent clients can connect to the stream', async () => {

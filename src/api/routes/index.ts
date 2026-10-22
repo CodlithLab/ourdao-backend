@@ -933,6 +933,10 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
       params.push(contract)
       where += ` AND contract_id = $${params.length}`
     }
+    if (before !== null) {
+      params.push(before)
+      where += ` AND ledger < $${params.length}`
+    }
     params.push(l)
     return query<EventRow>(
       `SELECT * FROM events ${where} ORDER BY ledger DESC LIMIT $${params.length}`,

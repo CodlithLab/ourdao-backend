@@ -7,6 +7,7 @@ import { config } from './config.js'
 export const NONCE_TIMESTAMP_HEX_LEN = 12
 /** Random bytes after the prefix, so prefix + random is 64 hex chars. */
 const NONCE_RANDOM_BYTES = 26
+const MAX_NONCES_PER_ADDRESS = 100
 
 // Authentication failure counters (issue #183, #403)
 export const authStats = {
@@ -191,7 +192,7 @@ export class MemoryNonceStore implements NonceStore {
   private readonly sweepIntervalMs: number
   private sweepTimer: NodeJS.Timeout | null = null
   // Max outstanding nonces per address (issue #180)
-  private readonly maxNoncesPerAddress = 100
+  private readonly maxNoncesPerAddress = MAX_NONCES_PER_ADDRESS
 
   constructor() {
     this.ttlMs = config.db.nonceTtlMs
@@ -335,6 +336,21 @@ export class PostgresNonceStore implements NonceStore {
   }
 
   async issue(address: string, logger?: AuthLogger): Promise<string> {
+    const counts = await this.pool.query<{ total: string; address_total: string }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE expires_at > now()) AS total,
+         COUNT(*) FILTER (WHERE expires_at > now() AND address = $1) AS address_total
+       FROM auth_nonces`,
+      [address]
+    )
+    const count = counts.rows[0]
+    if (count && Number(count.total) >= config.db.nonceMaxEntries) {
+      throw new NonceStoreCapacityError()
+    }
+    if (count && Number(count.address_total) >= MAX_NONCES_PER_ADDRESS) {
+      throw new NonceStoreCapacityError(`Too many outstanding nonces for ${truncateAddress(address)}`)
+    }
+
     // Issue #179: make this atomic to prevent concurrent challenges clobbering each other.
     // A single INSERT statement avoids the race between SELECT and INSERT that allowed
     // two concurrent requests to both generate and store nonces. With nonce as the

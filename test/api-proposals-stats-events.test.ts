@@ -385,6 +385,9 @@ describe('API: proposals, stats, events, admin/log', () => {
     const res = await app.inject({ method: 'GET', url: '/api/admin/log' })
     const body = res.json()
     expect(body.map((e: { symbol: string }) => e.symbol)).toEqual(['threshold', 'paused'])
+
+    const paged = await app.inject({ method: 'GET', url: '/api/admin/log?before=30' })
+    expect(paged.json().map((e: { symbol: string }) => e.symbol)).toEqual(['paused'])
   })
 
   it('GET /api/interest returns the distribution history, newest first, with a before-ledger cursor (issue #24)', async () => {

@@ -24,7 +24,7 @@ describe('getLedgerHash', () => {
   it('resolves to the ledger hash on a normal response', async () => {
     vi.spyOn(server, 'getLedgers').mockResolvedValue({
       ...baseResponse,
-      ledgers: [{ hash: 'HASH_123' } as Awaited<ReturnType<typeof server.getLedgers>>['ledgers'][number]],
+      ledgers: [{ sequence: 123, hash: 'HASH_123' } as Awaited<ReturnType<typeof server.getLedgers>>['ledgers'][number]],
     })
 
     await expect(getLedgerHash(123)).resolves.toBe('HASH_123')
@@ -42,5 +42,14 @@ describe('getLedgerHash', () => {
     vi.spyOn(server, 'getLedgers').mockResolvedValue({ ...baseResponse, ledgers: [] })
 
     await expect(getLedgerHash(999)).resolves.toBeNull()
+  })
+
+  it('resolves to null when the RPC returns a different ledger sequence', async () => {
+    vi.spyOn(server, 'getLedgers').mockResolvedValue({
+      ...baseResponse,
+      ledgers: [{ sequence: 5000, hash: 'HASH_5000' } as Awaited<ReturnType<typeof server.getLedgers>>['ledgers'][number]],
+    })
+
+    await expect(getLedgerHash(123)).resolves.toBeNull()
   })
 })

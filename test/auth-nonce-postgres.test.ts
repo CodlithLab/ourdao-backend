@@ -1,8 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { Keypair } from '@stellar/stellar-sdk'
-import { PostgresNonceStore, authenticateRequest, authStats, resetAuthStats } from '../src/auth.js'
+import { NonceStoreCapacityError, PostgresNonceStore, authenticateRequest } from '../src/auth.js'
 import { pool, query, queryOne } from '../src/db/index.js'
 import { closeDb, resetDb } from './db.js'
+import { config } from '../src/config.js'
 
 describe('PostgresNonceStore', () => {
   let store: PostgresNonceStore
@@ -207,12 +208,27 @@ describe('PostgresNonceStore', () => {
     await expect(store.shutdown()).resolves.toBeUndefined()
   })
 
-  it('increments authStats.challengesIssued when issuing nonces (issue #403)', async () => {
-    resetAuthStats()
+  it('rejects issuance when the unexpired store reaches its configured capacity', async () => {
     const address = 'GBJCHUKZMTFSLOMNC7P4TS4VJJBTCYL3AESFVNUN3AHYJRULJLW7AUWQ'
-    await store.issue(address)
-    expect(authStats.challengesIssued).toBe(1)
-    await store.issue(address)
-    expect(authStats.challengesIssued).toBe(2)
+    const originalMaxEntries = config.db.nonceMaxEntries
+    config.db.nonceMaxEntries = 1
+    try {
+      await store.issue(address)
+      await expect(store.issue(address)).rejects.toBeInstanceOf(NonceStoreCapacityError)
+    } finally {
+      config.db.nonceMaxEntries = originalMaxEntries
+    }
+  })
+
+  it('rejects issuance when an address has too many unexpired nonces', async () => {
+    const address = 'GBJCHUKZMTFSLOMNC7P4TS4VJJBTCYL3AESFVNUN3AHYJRULJLW7AUWQ'
+    await query(
+      `INSERT INTO auth_nonces (nonce, address, expires_at)
+       SELECT 'seed-' || n, $1, now() + interval '1 hour'
+       FROM generate_series(1, 100) AS n`,
+      [address]
+    )
+
+    await expect(store.issue(address)).rejects.toBeInstanceOf(NonceStoreCapacityError)
   })
 })

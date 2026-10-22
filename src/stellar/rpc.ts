@@ -86,7 +86,8 @@ export async function getLatestLedgerInfo(): Promise<{ sequence: number; hash: s
 export async function getLedgerHash(sequence: number): Promise<string | null> {
   try {
     const res = await server.getLedgers({ startLedger: sequence, pagination: { limit: 1 } })
-    return res.ledgers[0]?.hash ?? null
+    const ledger = res.ledgers[0]
+    return ledger?.sequence === sequence ? ledger.hash : null
   } catch {
     return null
   }
