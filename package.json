@@ -27,7 +27,10 @@
     "test:coverage": "vitest run --coverage",
     "openapi:generate": "tsx scripts/generate-openapi-spec.ts",
     "openapi:validate": "tsx scripts/generate-openapi-spec.ts && git diff --exit-code openapi.json || (echo 'OpenAPI spec is out of sync. Run npm run openapi:generate and commit the changes.' && exit 1)",
-    "license:check": "tsx scripts/check-licenses.ts"
+    "license:check": "tsx scripts/check-licenses.ts",
+    "protection:check": "tsx scripts/branch-protection.ts check",
+    "protection:verify": "tsx scripts/branch-protection.ts verify",
+    "protection:apply": "tsx scripts/branch-protection.ts apply"
   },
   "dependencies": {
     "@fastify/compress": "^8.3.1",
