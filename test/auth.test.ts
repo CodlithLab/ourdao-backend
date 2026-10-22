@@ -8,6 +8,9 @@ import {
   verifySignature,
   AuthFailureTracker,
   MemoryNonceStore,
+  authStats,
+  getAuthStats,
+  resetAuthStats,
   type AuthLogger,
   type NonceStore,
 } from '../src/auth.js'
@@ -670,5 +673,28 @@ describe('AuthFailureTracker — per-address exponential backoff (issues #183, #
     const failures = (tracker as unknown as { failures: Map<string, unknown> }).failures
     expect(failures.size).toBe(0)
     tracker.shutdown()
+  })
+})
+
+describe('authStats.challengesIssued (issue #403)', () => {
+  afterEach(() => {
+    resetAuthStats()
+  })
+
+  it('increments challengesIssued when MemoryNonceStore.issue is called', async () => {
+    resetAuthStats()
+    expect(authStats.challengesIssued).toBe(0)
+    expect(getAuthStats().challengesIssued).toBe(0)
+
+    const store = new MemoryNonceStore()
+    await store.issue(G)
+    expect(authStats.challengesIssued).toBe(1)
+    expect(getAuthStats().challengesIssued).toBe(1)
+
+    await store.issue(G)
+    expect(authStats.challengesIssued).toBe(2)
+    expect(getAuthStats().challengesIssued).toBe(2)
+
+    await store.shutdown()
   })
 })

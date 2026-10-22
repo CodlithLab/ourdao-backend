@@ -470,13 +470,38 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     return { activity: rows.map(toTimelineEntry) }
   })
 
-  // --- Loan proposals ---
+  // --- Loan proposals (optional ?status=, ?borrower= filters) ---
   app.get('/proposals/loan', async (req, reply) => {
     setCachePolicy(reply, 'public-live')
     const q = req.query as Record<string, unknown>
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
     const l = limit(q.limit)
-    const rows = await query<LoanProposalRow>('SELECT * FROM loan_proposals ORDER BY id DESC LIMIT $1', [l])
+
+    if (q.borrower !== undefined && q.borrower !== null && q.borrower !== '') {
+      if (typeof q.borrower !== 'string' || !validAddress(q.borrower)) {
+        return reply.code(400).send({ error: 'invalid Stellar address' })
+      }
+    }
+    const borrower = typeof q.borrower === 'string' && q.borrower ? q.borrower : null
+    const status = typeof q.status === 'string' && q.status ? q.status : null
+
+    const conditions: string[] = []
+    const params: unknown[] = []
+    if (borrower) {
+      params.push(borrower)
+      conditions.push(`borrower = $${params.length}`)
+    }
+    if (status) {
+      params.push(status)
+      conditions.push(`status = $${params.length}`)
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    params.push(l)
+
+    const rows = await query<LoanProposalRow>(
+      `SELECT * FROM loan_proposals ${where} ORDER BY id DESC LIMIT $${params.length}`,
+      params,
+    )
     // The contract applies stake-weighted voting internally, but doesn't yet
     // publish `weight` on `loan_vote` — every tally here is an unweighted
     // headcount that can disagree with the on-chain result (issue #126).
@@ -484,14 +509,27 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     return rows.map((r) => ({ ...r, tallies_weighted: false }))
   })
 
+  // --- Single loan proposal lookup (issue #398) ---
+  app.get<{ Params: { id: string } }>('/proposals/loan/:id', async (req, reply) => {
+    setCachePolicy(reply, 'public-live')
+    const rawId = req.params.id.trim()
+    if (!/^[0-9]+$/.test(rawId) || !Number.isSafeInteger(Number(rawId)) || Number(rawId) <= 0) {
+      return reply.code(400).send({ error: 'invalid proposal id' })
+    }
+    const proposal = await queryOne<LoanProposalRow>('SELECT * FROM loan_proposals WHERE id = $1', [Number(rawId)])
+    if (!proposal) return reply.code(404).send({ error: 'loan proposal not found' })
+    return { ...proposal, tallies_weighted: false }
+  })
+
   // --- Loans (optional ?borrower= filter, ?before=<id> cursor) ---
   app.get('/loans', async (req, reply) => {
-    setCachePolicy(reply, 'public-live')
     const q = req.query as Record<string, unknown>
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
     const l = limit(q.limit)
     const before = cursor(q.before)
     if (invalidCursor(q.before)) return reply.code(400).send({ error: 'invalid before cursor' })
+    setCachePolicy(reply, historicalOrLive(before !== null))
+
     if (q.borrower !== undefined && q.borrower !== null && q.borrower !== '') {
       if (typeof q.borrower !== 'string' || !validAddress(q.borrower)) {
         return reply.code(400).send({ error: 'invalid Stellar address' })
@@ -543,15 +581,41 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     return { timeline: await entityTimeline(LOAN_TIMELINE_SYMBOLS, id) }
   })
 
-  // --- Treasury proposals ---
+  // --- Treasury proposals (optional ?status= filter) ---
   app.get('/proposals/treasury', async (req, reply) => {
     setCachePolicy(reply, 'public-live')
     const q = req.query as Record<string, unknown>
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
     const l = limit(q.limit)
-    const rows = await query<TreasuryProposalRow>('SELECT * FROM treasury_proposals ORDER BY id DESC LIMIT $1', [l])
+    const status = typeof q.status === 'string' && q.status ? q.status : null
+
+    const conditions: string[] = []
+    const params: unknown[] = []
+    if (status) {
+      params.push(status)
+      conditions.push(`status = $${params.length}`)
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    params.push(l)
+
+    const rows = await query<TreasuryProposalRow>(
+      `SELECT * FROM treasury_proposals ${where} ORDER BY id DESC LIMIT $${params.length}`,
+      params,
+    )
     // See the matching comment on GET /proposals/loan above (issue #126).
     return rows.map((r) => ({ ...r, tallies_weighted: false }))
+  })
+
+  // --- Single treasury proposal lookup (issue #398) ---
+  app.get<{ Params: { id: string } }>('/proposals/treasury/:id', async (req, reply) => {
+    setCachePolicy(reply, 'public-live')
+    const rawId = req.params.id.trim()
+    if (!/^[0-9]+$/.test(rawId) || !Number.isSafeInteger(Number(rawId)) || Number(rawId) <= 0) {
+      return reply.code(400).send({ error: 'invalid proposal id' })
+    }
+    const proposal = await queryOne<TreasuryProposalRow>('SELECT * FROM treasury_proposals WHERE id = $1', [Number(rawId)])
+    if (!proposal) return reply.code(404).send({ error: 'treasury proposal not found' })
+    return { ...proposal, tallies_weighted: false }
   })
 
   // --- A treasury proposal's full event history (issue #26) ---

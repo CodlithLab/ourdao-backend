@@ -13,7 +13,7 @@ import { pool } from '../db/index.js'
 import { registerCachePolicy } from './cache-policy.js'
 import { clientErrorHandler, frameworkErrors, registerErrorHandling } from './errors.js'
 import { registerRoutes } from './routes/index.js'
-import { MemoryNonceStore, PostgresNonceStore, type NonceStore } from '../auth.js'
+import { MemoryNonceStore, PostgresNonceStore, getAuthStats, type NonceStore } from '../auth.js'
 import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
@@ -271,8 +271,12 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
   // ── Routes (including /api/stream — issue #158) ──
   await app.register(registerRoutes, { prefix: '/api', nonceStore })
 
-  // ── Liveness probe (issue #2) — no DB round trip ──
-  app.get('/health', async () => ({ status: 'ok', contract: config.stellar.contractId || null }))
+  // ── Liveness probe (issue #2, #403) — no DB round trip ──
+  app.get('/health', async () => ({
+    status: 'ok',
+    contract: config.stellar.contractId || null,
+    auth: getAuthStats(),
+  }))
 
   // ── Dependency health indicators (issue #276) ──
   // Separate from `/health` (liveness — deliberately no DB round trip) and
