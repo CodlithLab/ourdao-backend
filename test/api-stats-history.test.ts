@@ -53,4 +53,30 @@ describe('API: historical loan stats', () => {
       },
     ]))
   })
+
+  it('does not cache an empty stats array on cold start and invalidates when stats are incremented', async () => {
+    // 1. Initially empty database should return empty array
+    const res1 = await app.inject({ method: 'GET', url: '/api/stats/history' })
+    expect(res1.statusCode).toBe(200)
+    expect(res1.json().data).toEqual([])
+
+    // 2. Insert new loan stats (simulating new loan origination or incrementDailyLoanStats)
+    await query(
+      `INSERT INTO daily_loan_stats
+         (day, loans_originated, principal_lent, principal_repaid, defaults_count, value_defaulted)
+       VALUES
+         ('2026-02-01', 1, 1000, 0, 0, 0)`
+    )
+
+    // 3. Subsequent request should immediately reflect the new data without waiting for TTL expiration
+    const res2 = await app.inject({ method: 'GET', url: '/api/stats/history' })
+    expect(res2.statusCode).toBe(200)
+    expect(res2.json().data.length).toBeGreaterThan(0)
+    expect(res2.json().data).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        date: '2026-02-01',
+        principalLent: '1000',
+      })
+    ]))
+  })
 })

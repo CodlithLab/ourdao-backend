@@ -4,6 +4,7 @@ import { isKnownSymbol, warnUnknownSymbol, type DecodedEvent } from '../stellar/
 import { STREAM_CHANNELS, type StreamChannel } from '../api/stream.js'
 import { getTracer } from '../telemetry.js'
 import type { NotificationType } from '../types.js'
+import { createHistoryCache } from '../api/history-cache.js'
 
 async function incrementDailyLoanStats(
   client: PoolClient,
@@ -35,6 +36,8 @@ async function incrementDailyLoanStats(
       deltas.valueDefaulted ?? '0',
     ]
   )
+  const historyCache = createHistoryCache()
+  await historyCache.invalidate()
 }
 
 // Helpers ------------------------------------------------------------------
