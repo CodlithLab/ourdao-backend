@@ -15,6 +15,11 @@ export interface LoanHistoryResponse {
   }>
 }
 
+export async function invalidateHistoryCache(): Promise<void> {
+  const cache = createHistoryCache()
+  await cache.invalidate()
+}
+
 export function createHistoryCache(): {
   get(): Promise<LoanHistoryResponse | null>
   set(value: LoanHistoryResponse): Promise<void>
