@@ -209,6 +209,7 @@ export const ADMIN_AUDIT_ACTIONS = [
   'resolve_quarantined_event',
   'reset_cursor',
   'manual_reindex',
+  'clear_reorg',
 ] as const
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number]

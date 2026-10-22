@@ -549,37 +549,43 @@ async function ingestEventQuarantined(ev: DecodedEvent, lastLedger: number): Pro
   }
 }
 
-interface QuarantineState {
+export interface QuarantineState {
   pageKey: string
   errorMessage: string
   failures: number
 }
 
 interface QuarantineStateRow {
+  contract_id: string
   page_key: string | null
   error_message: string | null
   failures: number
   escalated_at: string | null
 }
 
-// Issue #172: quarantine state now persists in the database so a restart
-// doesn't reset the counter. Loads on first use from the persistent row,
-// then updated in memory for performance. The database is the source of truth.
-let quarantineState: QuarantineState | null = null
-let quarantineStateLoaded = false
+// Issue #172, #384: quarantine state now persists in the database keyed by contract_id
+// so a restart doesn't reset the counter and multiple tailed contracts do not wipe
+// or overwrite each other's failure counts.
+const quarantineStates = new Map<string, QuarantineState | null>()
+const quarantineStatesLoaded = new Set<string>()
+
+export function resetQuarantineStateInMemory(): void {
+  quarantineStates.clear()
+  quarantineStatesLoaded.clear()
+}
 
 function pageKeyFor(events: rpc.Api.EventResponse[]): string {
   if (events.length === 0) return ''
   return `${events[0]!.id}..${events[events.length - 1]!.id}:${events.length}`
 }
 
-// Issue #172: Load quarantine state from persistent storage. Called once per
-// poll cycle before quarantine logic runs. Returns null if the stored state is
-// for a different page (i.e., we've moved past the quarantined page).
-async function loadQuarantineState(): Promise<QuarantineState | null> {
+// Issue #172, #384: Load quarantine state from persistent storage keyed by contract_id.
+export async function loadQuarantineState(contractId?: string): Promise<QuarantineState | null> {
+  const targetId = contractId || config.stellar.contractId || 'default'
   try {
     const row = await queryOne<QuarantineStateRow>(
-      'SELECT page_key, error_message, failures, escalated_at FROM quarantine_state WHERE id = 1'
+      'SELECT contract_id, page_key, error_message, failures, escalated_at FROM quarantine_state WHERE contract_id = $1',
+      [targetId]
     )
     if (!row || !row.page_key || !row.error_message) return null
     return {
@@ -588,30 +594,49 @@ async function loadQuarantineState(): Promise<QuarantineState | null> {
       failures: row.failures,
     }
   } catch (err) {
-    console.error(`[indexer] failed to load quarantine state: ${err instanceof Error ? err.message : String(err)}`)
+    console.error(`[indexer] failed to load quarantine state for ${targetId}: ${err instanceof Error ? err.message : String(err)}`)
     return null
   }
 }
 
-// Issue #172: Persist quarantine state so it survives a restart. On escalation
-// to per-event folding, marks the escalation timestamp for alerting (issue #174).
-async function persistQuarantineState(state: QuarantineState | null, escalating = false): Promise<void> {
+// Issue #172, #384: Persist quarantine state keyed by contract_id so it survives a restart.
+export async function persistQuarantineState(
+  contractIdOrState: string | QuarantineState | null,
+  stateOrEscalating?: QuarantineState | null | boolean,
+  escalating = false
+): Promise<void> {
+  let targetContractId: string
+  let state: QuarantineState | null
+  let isEscalating = escalating
+
+  if (typeof contractIdOrState === 'string') {
+    targetContractId = contractIdOrState
+    state = (stateOrEscalating as QuarantineState | null) ?? null
+  } else {
+    targetContractId = config.stellar.contractId || 'default'
+    state = contractIdOrState
+    isEscalating = Boolean(stateOrEscalating)
+  }
+
   try {
     if (state === null) {
       await pool.query(
-        `UPDATE quarantine_state SET page_key = NULL, error_message = NULL, failures = 1, escalated_at = NULL, updated_at = now() WHERE id = 1`
+        `INSERT INTO quarantine_state (contract_id, id, page_key, error_message, failures, escalated_at, updated_at)
+         VALUES ($1, 1, NULL, NULL, 1, NULL, now())
+         ON CONFLICT (contract_id) DO UPDATE SET page_key = NULL, error_message = NULL, failures = 1, escalated_at = NULL, updated_at = now()`,
+        [targetContractId]
       )
     } else {
       await pool.query(
-        `INSERT INTO quarantine_state (id, page_key, error_message, failures, escalated_at, updated_at)
-         VALUES (1, $1, $2, $3, ${escalating ? 'now()' : 'NULL'}, now())
-         ON CONFLICT (id) DO UPDATE SET page_key = $1, error_message = $2, failures = $3, escalated_at = COALESCE(EXCLUDED.escalated_at, quarantine_state.escalated_at), updated_at = now()`,
-        [state.pageKey, state.errorMessage, state.failures]
+        `INSERT INTO quarantine_state (contract_id, id, page_key, error_message, failures, escalated_at, updated_at)
+         VALUES ($1, 1, $2, $3, $4, ${isEscalating ? 'now()' : 'NULL'}, now())
+         ON CONFLICT (contract_id) DO UPDATE SET page_key = $2, error_message = $3, failures = $4, escalated_at = COALESCE(EXCLUDED.escalated_at, quarantine_state.escalated_at), updated_at = now()`,
+        [targetContractId, state.pageKey, state.errorMessage, state.failures]
       )
     }
   } catch (err) {
     console.error(
-      `[indexer] failed to persist quarantine state: ${err instanceof Error ? err.message : String(err)}`
+      `[indexer] failed to persist quarantine state for ${targetContractId}: ${err instanceof Error ? err.message : String(err)}`
     )
   }
 }
@@ -634,55 +659,61 @@ export async function cleanupExpiredFailedEvents(): Promise<void> {
  *  (i.e. the same page), it's treated as deterministic and the page is
  *  retried one event per transaction so the rest of it can still fold.
  *
- *  Issue #172: State persists in the database now so a restart doesn't reset
- *  the counter. Load on first use, update on every iteration, persist after
- *  each decision. */
-async function ingestPageWithQuarantine(events: rpc.Api.EventResponse[], lastLedger: number): Promise<void> {
-  // Issue #172: Load persistent state on first use
-  if (!quarantineStateLoaded) {
-    quarantineState = await loadQuarantineState()
-    quarantineStateLoaded = true
+ *  Issue #172, #384: State persists in the database per contract_id now so a
+ *  restart doesn't reset the counter and multiple contracts do not interfere. */
+async function ingestPageWithQuarantine(
+  events: rpc.Api.EventResponse[],
+  lastLedger: number,
+  contractId: string = config.stellar.contractId || 'default'
+): Promise<void> {
+  // Issue #172, #384: Load persistent state on first use for this contract
+  if (!quarantineStatesLoaded.has(contractId)) {
+    quarantineStates.set(contractId, await loadQuarantineState(contractId))
+    quarantineStatesLoaded.add(contractId)
   }
+
+  let state = quarantineStates.get(contractId) ?? null
 
   try {
     await ingestPage(events, lastLedger)
     // Fold succeeded — clear quarantine state and persist
-    quarantineState = null
-    await persistQuarantineState(null)
+    quarantineStates.set(contractId, null)
+    await persistQuarantineState(contractId, null)
     return
   } catch (err) {
     if (err instanceof ReorgDetectedError) throw err
 
     const pageKey = pageKeyFor(events)
     const errorMessage = err instanceof Error ? err.message : String(err)
-    if (quarantineState && quarantineState.pageKey === pageKey && quarantineState.errorMessage === errorMessage) {
-      quarantineState.failures += 1
+    if (state && state.pageKey === pageKey && state.errorMessage === errorMessage) {
+      state.failures += 1
     } else {
-      quarantineState = { pageKey, errorMessage, failures: 1 }
+      state = { pageKey, errorMessage, failures: 1 }
     }
+    quarantineStates.set(contractId, state)
 
     // Persist after every failure
-    await persistQuarantineState(quarantineState)
+    await persistQuarantineState(contractId, state)
 
-    if (quarantineState.failures < config.indexer.quarantineAfterFailures) {
+    if (state.failures < config.indexer.quarantineAfterFailures) {
       // Might still be transient — let runIndexer's normal backoff-and-retry
       // give it another chance before concluding it's deterministic.
       throw err
     }
 
     console.error(
-      `[indexer] page failed ${quarantineState.failures} consecutive times with the same error — ` +
+      `[indexer] [${contractId}] page failed ${state.failures} consecutive times with the same error — ` +
         `switching to per-event quarantine mode. ${errorMessage}`
     )
     // Issue #174: Mark escalation for alerting
-    await persistQuarantineState(quarantineState, true)
+    await persistQuarantineState(contractId, state, true)
 
     for (const raw of events) {
       const ev = decodeEvent(raw)
       await ingestEventQuarantined(ev, lastLedger)
     }
-    quarantineState = null
-    await persistQuarantineState(null)
+    quarantineStates.set(contractId, null)
+    await persistQuarantineState(contractId, null)
   }
 }
 
@@ -788,7 +819,7 @@ export async function fetchOnce(contractId: string): Promise<void> {
       span.setAttribute('page.event_count', pageCount)
       span.setAttribute('page.last_folded_ledger', lastLedger)
       try {
-        await ingestPageWithQuarantine(events, lastLedger)
+        await ingestPageWithQuarantine(events, lastLedger, contractId)
       } catch (err) {
         span.recordException(err instanceof Error ? err : String(err))
         span.setStatus({ code: SpanStatusCode.ERROR })

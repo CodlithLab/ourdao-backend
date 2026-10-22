@@ -124,7 +124,25 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>)
     await client.query('COMMIT')
     return result
   } catch (err) {
-    await client.query('ROLLBACK')
+    try {
+      await client.query('ROLLBACK')
+    } catch (rollbackErr) {
+      console.error('[db] transaction rollback failed:', rollbackErr)
+      if (err instanceof Error) {
+        if (!('cause' in err) || !err.cause) {
+          try {
+            Object.defineProperty(err, 'cause', {
+              value: rollbackErr,
+              configurable: true,
+              writable: true,
+              enumerable: false,
+            })
+          } catch {
+            // ignore if object cannot be extended
+          }
+        }
+      }
+    }
     throw err
   } finally {
     client.release()

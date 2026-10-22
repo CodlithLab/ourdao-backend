@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { pool } from '../src/db/index.js'
 import { DERIVED_TABLES } from '../src/indexer/derived-tables.js'
+import { resetQuarantineStateInMemory } from '../src/indexer/poller.js'
 
 const schemaPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/db/schema.sql')
 
@@ -38,6 +39,7 @@ const NON_DERIVED_TABLES = [
 ]
 
 export async function resetDb(): Promise<void> {
+  resetQuarantineStateInMemory()
   await ensureSchema()
   const allTables = [...DERIVED_TABLES, ...NON_DERIVED_TABLES]
   // Issue #204: TRUNCATE now safe to run in parallel — each worker has its own schema

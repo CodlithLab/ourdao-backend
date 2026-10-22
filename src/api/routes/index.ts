@@ -32,7 +32,8 @@ import { ConcurrencyGate } from '../load-shedding.js'
 import { withLoanDerived } from '../loan-derived.js'
 import { getOrSetCache, membersListCacheKey, memberSummaryCacheKey } from '../../cache/redis.js'
 import { replayFailedEvent } from '../../indexer/replay.js'
-import { createHistoryCache, invalidateHistoryCache } from '../history-cache.js'
+import { clearRecordedReorg } from '../../indexer/clear-reorg.js'
+import { createHistoryCache } from '../history-cache.js'
 
 function parseLimit(v: unknown, def = 50, max = 200): number | null {
   if (v === undefined || v === null || v === '') return def
@@ -1261,6 +1262,35 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     return { resolved: resolvedCount }
   })
 
+  // --- Clear reorg halt (issue #402) ---
+  // Acknowledges a recorded ledger discontinuity without a full reindex
+  // (e.g. for false alarms). Clears the halt and writes to admin_audit_log.
+  app.post('/admin/clear-reorg', {
+    schema: {
+      summary: 'Clear reorg halt',
+      tags: ['admin'],
+      description: 'Acknowledges a recorded ledger discontinuity without rebuilding. Clears uncleared reorg halts and records the action into admin_audit_log (issue #402).',
+    },
+  }, async (req, reply) => {
+    let adminAddress = 'operator'
+    const authHeader = req.headers.authorization
+    if (authHeader) {
+      const auth = await authenticateRequest(req.headers, nonceStore, undefined, req.log)
+      if (!auth.authenticated) {
+        return reply.code(auth.status).send({ error: auth.error || 'Authentication required' })
+      }
+      adminAddress = auth.address
+    } else if (typeof req.headers['x-admin-address'] === 'string' && req.headers['x-admin-address']) {
+      adminAddress = req.headers['x-admin-address']
+    }
+
+    const result = await clearRecordedReorg({
+      adminAddress,
+      ipAddress: req.ip ?? null,
+    })
+    return result
+  })
+
   // --- Admin audit log (issue #291) ---
   // Exposes the immutable admin_audit_log table to authorized maintainers.
   // Authentication is required: only a holder of a valid Stellar signature
@@ -1396,7 +1426,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
          (SELECT last_ledger FROM indexer_cursor ORDER BY updated_at ASC NULLS FIRST LIMIT 1) AS last_ledger,
          (SELECT observed_tip_ledger FROM indexer_cursor ORDER BY updated_at ASC NULLS FIRST LIMIT 1) AS observed_tip_ledger,
          (SELECT updated_at FROM indexer_cursor ORDER BY updated_at ASC NULLS FIRST LIMIT 1) AS cursor_updated_at,
-         (SELECT escalated_at FROM quarantine_state WHERE id = 1)                  AS quarantine_escalated_at,
+         (SELECT escalated_at FROM quarantine_state WHERE escalated_at IS NOT NULL ORDER BY escalated_at DESC LIMIT 1) AS quarantine_escalated_at,
          -- Issue #191: the latest uncleared ledger discontinuity, if any.
          (SELECT detected_at FROM reorg_halts WHERE cleared_at IS NULL ORDER BY id DESC LIMIT 1) AS reorg_detected_at,
          (SELECT contract_id FROM reorg_halts WHERE cleared_at IS NULL ORDER BY id DESC LIMIT 1) AS reorg_contract_id,

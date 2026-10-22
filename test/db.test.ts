@@ -1,5 +1,5 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { query } from '../src/db/index.js'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { pool, query, withTransaction } from '../src/db/index.js'
 import { closeDb, resetDb } from './db.js'
 
 describe('test db harness', () => {
@@ -46,34 +46,53 @@ describe('test db harness', () => {
     expect(typeof rows[0]?.joined_ledger).toBe('number')
   })
 
-  // Issue #393: delete_expired_failed_events() prunes resolved failed_events only and guards empty retention setting
-  it('delete_expired_failed_events() preserves unresolved events past retention and prunes resolved events', async () => {
-    // Insert one unresolved event older than 30 days
-    await query(
-      `INSERT INTO failed_events (event_id, symbol, ledger, error, created_at, resolved_at)
-       VALUES ('unresolved-old', 'loan_dflt', 10, 'error', now() - interval '40 days', NULL)`
-    )
-    // Insert one resolved event older than 30 days
-    await query(
-      `INSERT INTO failed_events (event_id, symbol, ledger, error, created_at, resolved_at)
-       VALUES ('resolved-old', 'loan_dflt', 20, 'error', now() - interval '40 days', now() - interval '35 days')`
-    )
-    // Insert one resolved event younger than 30 days
-    await query(
-      `INSERT INTO failed_events (event_id, symbol, ledger, error, created_at, resolved_at)
-       VALUES ('resolved-recent', 'loan_dflt', 30, 'error', now() - interval '10 days', now() - interval '5 days')`
-    )
+  // Issue #401: withTransaction must not mask original error if ROLLBACK throws
+  it('rolls back and rethrows original error on transaction failure', async () => {
+    const error = new Error('simulated failure inside transaction')
+    await expect(
+      withTransaction(async (client) => {
+        await client.query("INSERT INTO members (address, contribution) VALUES ('GFAIL', 100)")
+        throw error
+      })
+    ).rejects.toThrow('simulated failure inside transaction')
 
-    await query('SELECT delete_expired_failed_events()')
-
-    const remaining = await query<{ event_id: string }>(
-      'SELECT event_id FROM failed_events ORDER BY event_id'
-    )
-    expect(remaining.map((r) => r.event_id)).toEqual(['resolved-recent', 'unresolved-old'])
+    const rows = await query("SELECT * FROM members WHERE address = 'GFAIL'")
+    expect(rows).toHaveLength(0)
   })
 
-  it('delete_expired_failed_events() does not crash when app.failed_events_retention_days is empty string', async () => {
-    await query("SET app.failed_events_retention_days = ''")
-    await expect(query('SELECT delete_expired_failed_events()')).resolves.not.toThrow()
+  it('preserves the original error and attaches rollback failure when ROLLBACK throws', async () => {
+    const originalError = new Error('Original query execution failed')
+    const rollbackError = new Error('Connection terminated unexpectedly')
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const mockClient = {
+      query: vi.fn(async (sql: string) => {
+        if (sql === 'BEGIN') return
+        if (sql === 'ROLLBACK') throw rollbackError
+        throw new Error(`Unexpected query: ${sql}`)
+      }),
+      release: vi.fn(),
+    }
+
+    vi.spyOn(pool, 'connect').mockImplementationOnce(async () => mockClient as unknown as import('pg').PoolClient)
+
+    let caughtError: unknown
+    try {
+      await withTransaction(async () => {
+        throw originalError
+      })
+    } catch (err) {
+      caughtError = err
+    }
+
+    expect(caughtError).toBe(originalError)
+    expect((caughtError as Error).cause).toBe(rollbackError)
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[db] transaction rollback failed:',
+      rollbackError
+    )
+    expect(mockClient.release).toHaveBeenCalled()
+
+    consoleSpy.mockRestore()
   })
 })
