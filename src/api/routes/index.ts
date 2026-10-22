@@ -713,7 +713,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
 
     // Ownership check uses the address `authenticateRequest` proved control
     // of — never a second parse of the raw header (issue #70).
-    if (notification.address !== auth.address) {
+    if (notification.address !== auth.ed25519Address) {
       return reply.code(403).send({ error: 'Cannot modify notifications for another address' })
     }
     
