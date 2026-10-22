@@ -321,7 +321,9 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     if (addressType !== 'ed25519' && addressType !== 'muxed') {
       return reply.code(400).send({ error: 'invalid Stellar address' })
     }
+    
 
+    
     try {
       const nonce = await nonceStore.issue(address, req.log)
       return { nonce }
