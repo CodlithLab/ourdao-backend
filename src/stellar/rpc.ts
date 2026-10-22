@@ -25,9 +25,10 @@ async function withRateLimitRetry<T>(
       return await fn()
     } catch (err: unknown) {
       const isRateLimited =
-        (!!err &&
+        (err &&
           typeof err === 'object' &&
-          (('code' in err && err.code === 429) || ('status' in err && err.status === 429))) ||
+          (('code' in err && err.code === 429) ||
+            ('status' in err && err.status === 429))) ||
         (err instanceof Error && (err.message.includes('429') || err.message.toLowerCase().includes('rate limit')))
 
       if (!isRateLimited || attempt >= maxRetries) {

@@ -54,8 +54,6 @@ function runMaintenanceLoop(signal: AbortSignal): { stopped: Promise<void> } {
     // Don't hold the process open on this timer alone — mirrors the
     // indexer's own backoff-sleep timers (issue #121).
     if (timer.unref) timer.unref()
-    // Aborting while idle between runs is a clean stop: without resolving
-    // `stopped` here, shutdown awaits it forever and never closes the pool.
     signal.addEventListener(
       'abort',
       () => {

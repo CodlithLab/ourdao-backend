@@ -1,5 +1,8 @@
 name: Mutation Testing
 
+permissions:
+  contents: read
+
 # Scheduled and manual dispatch only (#209).
 # Mutation testing against the real Postgres database is computationally
 # intensive and must serialize test runs (concurrency: 1) to prevent resetDb()
@@ -32,9 +35,9 @@ jobs:
       TEST_DATABASE_URL: postgres://ourdao:ourdao@localhost:5432/ourdao_test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.0.2
         with:
           node-version: 22
           cache: npm
@@ -48,7 +51,7 @@ jobs:
         run: npx stryker run
 
       - name: Upload mutation report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.3.1
         if: always()
         with:
           name: mutation-report

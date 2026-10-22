@@ -1,5 +1,9 @@
 name: CI
 
+permissions:
+  contents: read
+  actions: read
+
 on:
   push:
     branches: [main]
@@ -37,9 +41,9 @@ jobs:
       TEST_DATABASE_URL: postgres://ourdao:ourdao@localhost:5432/ourdao_test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.0.2
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -156,6 +160,9 @@ jobs:
   docker-build:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
 
     services:
       postgres:
@@ -177,12 +184,12 @@ jobs:
       IMAGE: ourdao-backend:ci
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.0
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3.6.0
 
       - name: Build image (no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v6.2.0
         with:
           context: .
           load: true
@@ -205,7 +212,7 @@ jobs:
           output: 'sbom.json'
 
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.3.1
         with:
           name: sbom-${{ github.sha }}
           path: sbom.json
@@ -215,7 +222,7 @@ jobs:
       # Publishes full findings to GitHub Actions step summary and enforces
       # a failure policy on HIGH and CRITICAL vulnerabilities.
       - name: Scan image with Trivy (capture summary)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@v0.28.1
         with:
           image-ref: ${{ env.IMAGE }}
           format: 'table'
@@ -238,7 +245,7 @@ jobs:
           fi
 
       - name: Enforce vulnerability policy (fail on HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@v0.28.1
         with:
           image-ref: ${{ env.IMAGE }}
           format: 'table'
@@ -248,7 +255,7 @@ jobs:
           trivyignores: '.trivyignore'
 
       - name: Enforce vulnerability policy (fail on CRITICAL)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@v0.28.1
         with:
           image-ref: ${{ env.IMAGE }}
           format: 'table'

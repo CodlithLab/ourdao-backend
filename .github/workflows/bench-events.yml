@@ -31,6 +31,9 @@ on:
         required: false
         default: '20000'
 
+permissions:
+  contents: read
+
 concurrency:
   group: bench-events-${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -64,9 +67,9 @@ jobs:
       BENCH_SCALE: ${{ github.event.inputs.scale || '20000' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.0.2
         with:
           node-version: 22
           cache: npm
@@ -102,7 +105,7 @@ jobs:
 
       - name: Upload full results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.3.1
         with:
           name: events-storage-bench-${{ github.run_id }}
           path: bench-results.json
