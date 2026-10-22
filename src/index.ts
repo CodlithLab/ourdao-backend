@@ -3,6 +3,7 @@ import { migrate } from './db/migrate.js'
 import { pool } from './db/index.js'
 import { buildServer, shutdownNonceStore } from './api/server.js'
 import { shutdownSharedListener, drainStreamClients } from './api/stream.js'
+import { closeRedis } from './cache/redis.js'
 
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
@@ -57,6 +58,7 @@ async function main(): Promise<void> {
     // Issue #207: shut down the nonce store's cleanup timers before ending
     // the pool, so they don't fire after the pool is closed.
     await shutdownNonceStore()
+    await closeRedis()
     await pool.end()
     app.log.info('shutdown complete')
     process.exit(0)

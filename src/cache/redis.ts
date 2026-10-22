@@ -30,6 +30,20 @@ function logConnectionFailureOnce(err: unknown): void {
  * `null` (and creates nothing) when `REDIS_URL` isn't configured — the
  * no-Redis-configured path never opens a socket or attempts a connection.
  */
+export const redis = new Proxy({} as Redis, {
+  get(_target, prop) {
+    const client = getClient()
+    if (!client) {
+      throw new Error('Redis is not configured (REDIS_URL is unset)')
+    }
+    const val = (client as unknown as Record<string, unknown>)[prop as string]
+    if (typeof val === 'function') {
+      return val.bind(client)
+    }
+    return val
+  },
+})
+
 function getClient(): Redis | null {
   if (!config.cache.redisUrl) return null
   if (client) return client
@@ -154,6 +168,17 @@ export const MEMBERS_LIST_CACHE_KEY_PATTERN = 'members:list:*'
 /** Cache key for one member's `/api/members/:address/summary` payload. */
 export function memberSummaryCacheKey(address: string): string {
   return `members:summary:${address}`
+}
+
+/**
+ * Disconnect or quit the shared redis client if active.
+ */
+export async function closeRedis(): Promise<void> {
+  if (client) {
+    await client.quit()
+    client = null
+  }
+  loggedConnectionFailure = false
 }
 
 /** Test-only: drop the shared client so a fresh REDIS_URL/mock takes effect

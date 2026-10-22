@@ -5,6 +5,7 @@ import { pool, createDedicatedClient } from './db/index.js'
 import { runIndexer, stopIndexer } from './indexer/poller.js'
 import { config } from './config.js'
 import { runMaintenance, logMaintenanceResult } from './db/maintenance.js'
+import { closeRedis } from './cache/redis.js'
 
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
@@ -121,6 +122,7 @@ async function main(): Promise<void> {
     await maintenance.stopped
 
     console.log('[indexer] closing database pool')
+    await closeRedis()
     await pool.end()
     await shutdownTelemetry()
     console.log('[indexer] shutdown complete')

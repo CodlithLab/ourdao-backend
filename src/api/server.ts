@@ -19,6 +19,7 @@ import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { server as rpcServer } from '../stellar/rpc.js'
 import { metricsRegistry } from './metrics.js'
+import { closeRedis } from '../cache/redis.js'
 
 interface ReorgHaltRow {
   contract_id: string
@@ -192,6 +193,7 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
   // Issue #182: register shutdown hook to clean up nonce store timers on close
   app.addHook('onClose', async () => {
     await nonceStore.shutdown()
+    await closeRedis()
   })
 
   // ── OpenAPI / Swagger (issue #215) ──
