@@ -57,18 +57,29 @@ cleanup() {
     if [ -n "${TEMP_BACKUP:-}" ] && [ -f "$TEMP_BACKUP" ]; then
         rm -f "$TEMP_BACKUP"
     fi
+    if [ -n "${DECOMPRESSED_FILE:-}" ] && [ -f "$DECOMPRESSED_FILE" ]; then
+        rm -f "$DECOMPRESSED_FILE"
+    fi
     exit "$exit_code"
 }
 
+# Temp files tracked globally so cleanup() can remove them
+TEMP_BACKUP=""
+DECOMPRESSED_FILE=""
+BACKUP_FILE=""
+
 trap cleanup EXIT INT TERM
 
-# Check dependencies
+# Check dependencies (psql runs inside the container, so it is not required on the host)
 check_dependencies() {
+    local source="$1"
     local missing=()
-    
+
     command -v docker >/dev/null 2>&1 || missing+=("docker")
-    command -v psql >/dev/null 2>&1 || missing+=("psql")
-    
+    if [[ "$source" =~ \.gz$ ]]; then
+        command -v gunzip >/dev/null 2>&1 || missing+=("gunzip")
+    fi
+
     if [ ${#missing[@]} -gt 0 ]; then
         error "Missing required dependencies: ${missing[*]}"
         error "Please install them and try again."
@@ -92,24 +103,22 @@ download_backup() {
             error "Neither curl nor wget found. Cannot download backup."
             exit 2
         fi
-        
-        echo "$TEMP_BACKUP"
+
+        BACKUP_FILE="$TEMP_BACKUP"
     else
-        echo "$source"
+        BACKUP_FILE="$source"
     fi
 }
 
 # Decompress backup if needed
 decompress_if_needed() {
-    local file="$1"
-    
-    if [[ "$file" =~ \.gz$ ]]; then
+    local source="$1"
+
+    if [[ "$source" =~ \.gz$ ]]; then
         log "Decompressing gzipped backup..."
-        local decompressed=$(mktemp /tmp/backup-verify-decompressed.XXXXXX)
-        gunzip -c "$file" > "$decompressed"
-        echo "$decompressed"
-    else
-        echo "$file"
+        DECOMPRESSED_FILE=$(mktemp /tmp/backup-verify-decompressed.XXXXXX)
+        gunzip -c "$BACKUP_FILE" > "$DECOMPRESSED_FILE"
+        BACKUP_FILE="$DECOMPRESSED_FILE"
     fi
 }
 
@@ -244,18 +253,20 @@ main() {
     local backup_source="$1"
     local expected_events="${2:-}"
     
-    check_dependencies
-    
-    local backup_file=$(download_backup "$backup_source")
-    backup_file=$(decompress_if_needed "$backup_file")
-    
-    if [ ! -f "$backup_file" ]; then
-        error "Backup file not found: $backup_file"
+    check_dependencies "$backup_source"
+
+    # Called directly (not via $(...)) so globals reach cleanup() and log output isn't captured
+    download_backup "$backup_source"
+
+    if [ ! -f "$BACKUP_FILE" ]; then
+        error "Backup file not found: $BACKUP_FILE"
         exit 2
     fi
-    
+
+    decompress_if_needed "$backup_source"
+
     start_postgres_container
-    restore_backup "$backup_file"
+    restore_backup "$BACKUP_FILE"
     verify_counts "$expected_events"
     
     log "All checks passed!"
