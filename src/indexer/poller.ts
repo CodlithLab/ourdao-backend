@@ -28,6 +28,17 @@ interface CursorRow {
 let abortController: AbortController | null = null
 let running = false
 
+// Issue #173: saveCursor can fail after a page is folded, presenting as a
+// stalled indexer even though events are being ingested. Track cursor writes
+// separately so transient write failures don't wedge progress reporting.
+// Issue #383: keyed by contract_id — with multi-contract tailing (issue #289)
+// a successful write for one contract must not clear another's failure.
+export interface CursorWriteFailure {
+  error: string
+  at: number
+}
+const cursorWriteFailures = new Map<string, CursorWriteFailure>()
+
 /** Thrown when the ledger sequence the indexer sees stops being monotonic —
  *  the RPC's reported tip fell below our cursor, or a fetched page contains
  *  an event from a ledger we already advanced past. It means history diverged
@@ -221,11 +232,11 @@ async function saveCursor(
        ON CONFLICT (contract_id) DO UPDATE SET paging_token = $1, last_ledger = $2, last_ledger_hash = $3, observed_tip_ledger = $4, updated_at = now()`,
       [pagingToken, lastLedger, lastLedgerHash, observedTipLedger, contractId]
     )
-    // Clear any prior cursor write failure now that this one succeeded
-    cursorWriteFailures = null
+    // Clear this contract's prior cursor write failure now that this one succeeded
+    cursorWriteFailures.delete(contractId)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    cursorWriteFailures = { error: msg, at: Date.now() }
+    cursorWriteFailures.set(contractId, { error: msg, at: Date.now() })
     // Re-throw: the poll loop needs to know folding didn't complete
     // (the fold itself succeeded, but its progress wasn't recorded).
     throw new Error(`Cursor write failed: ${msg}`, { cause: err })
@@ -398,17 +409,23 @@ async function ingestPage(events: rpc.Api.EventResponse[], lastLedger: number): 
   }
 }
 
-// Issue #173: saveCursor can fail after a page is folded, presenting as a
-// stalled indexer even though events are being ingested. Track cursor writes
-// separately so transient write failures don't wedge progress reporting.
-let cursorWriteFailures: { error: string; at: number } | null = null
-
-/** Issue #173: Get the last cursor write failure, if any. Used for diagnostics
- *  to distinguish between a stalled indexer (fold succeeded, cursor write failed)
- *  and genuine staleness (nothing is being folded).
+/** Issue #173: Get the last cursor write failure per contract, if any. Used for
+ *  diagnostics to distinguish between a stalled indexer (fold succeeded, cursor
+ *  write failed) and genuine staleness (nothing is being folded). Issue #383:
+ *  keyed by contract_id; returns a snapshot, not the live map.
  */
-export function getCursorWriteFailures(): { error: string; at: number } | null {
-  return cursorWriteFailures
+export function getCursorWriteFailures(): ReadonlyMap<string, CursorWriteFailure> {
+  return new Map(cursorWriteFailures)
+}
+
+/** Issue #383: the last cursor write failure for one contract, if any. */
+export function getCursorWriteFailure(contractId: string): CursorWriteFailure | null {
+  return cursorWriteFailures.get(contractId) ?? null
+}
+
+/** Test helper: clear recorded cursor write failures between test cases. */
+export function resetCursorWriteFailuresForTests(): void {
+  cursorWriteFailures.clear()
 }
 
 async function recordQuarantinedEvent(ev: DecodedEvent, error: unknown): Promise<void> {

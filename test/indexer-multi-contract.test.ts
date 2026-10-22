@@ -3,7 +3,12 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { pool, query } from '../src/db/index.js'
 import { assertContractsConfigured, resolveConfig } from '../src/config.js'
-import { fetchOnce } from '../src/indexer/poller.js'
+import {
+  fetchOnce,
+  getCursorWriteFailure,
+  getCursorWriteFailures,
+  resetCursorWriteFailuresForTests,
+} from '../src/indexer/poller.js'
 import { closeDb, resetDb } from './db.js'
 import { decodedEvent } from './fixtures.js'
 import type { DecodedEvent } from '../src/stellar/events.js'
@@ -104,5 +109,95 @@ describe('indexer: multi-contract event tailing (issue #289)', () => {
     const { resetForContractChange } = await import('../src/indexer/poller.js')
     await resetForContractChange()
     expect(await query('SELECT * FROM indexer_cursor')).toEqual([])
+  })
+})
+
+describe('indexer: per-contract cursor write failure tracking (issue #383)', () => {
+  // Fail only the cursor upsert for `failingContract`; every other query
+  // (the page fold, the other contract's cursor write) goes through.
+  function failCursorWriteFor(failingContract: string) {
+    const realQuery = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>
+    return vi.spyOn(pool, 'query').mockImplementation(((text: unknown, params?: unknown[]) => {
+      if (
+        typeof text === 'string' &&
+        text.includes('INSERT INTO indexer_cursor') &&
+        params?.[4] === failingContract
+      ) {
+        return Promise.reject(new Error(`disk full for ${failingContract}`))
+      }
+      return realQuery(text, params)
+    }) as typeof pool.query)
+  }
+
+  beforeEach(async () => {
+    await resetDb()
+    getEventsMock.mockReset()
+    resetCursorWriteFailuresForTests()
+  })
+  afterAll(closeDb)
+
+  it("a successful cursor write for one contract does not clear another contract's failure", async () => {
+    getEventsMock
+      .mockResolvedValueOnce({ events: [decodedEvent('joined', { member: 'GA', fee: '10' })], cursor: 'tok-a', latestLedger: 100_000 })
+      .mockResolvedValueOnce({ events: [decodedEvent('joined', { member: 'GB', fee: '20' })], cursor: 'tok-b', latestLedger: 100_000 })
+
+    const spy = failCursorWriteFor('CCONTRACT_A')
+    try {
+      await expect(fetchOnce('CCONTRACT_A')).rejects.toThrow(/Cursor write failed: disk full for CCONTRACT_A/)
+      await fetchOnce('CCONTRACT_B')
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(await cursorFor('CCONTRACT_B')).not.toBeNull()
+    expect(getCursorWriteFailure('CCONTRACT_A')).toMatchObject({ error: 'disk full for CCONTRACT_A' })
+    expect(typeof getCursorWriteFailure('CCONTRACT_A')?.at).toBe('number')
+    expect(getCursorWriteFailure('CCONTRACT_B')).toBeNull()
+    expect([...getCursorWriteFailures().keys()]).toEqual(['CCONTRACT_A'])
+  })
+
+  it("records failures for each contract independently and clears only on that contract's own success", async () => {
+    getEventsMock
+      .mockResolvedValueOnce({ events: [decodedEvent('joined', { member: 'GA', fee: '10' })], cursor: 'tok-a', latestLedger: 100_000 })
+      .mockResolvedValueOnce({ events: [decodedEvent('joined', { member: 'GB', fee: '20' })], cursor: 'tok-b', latestLedger: 100_000 })
+
+    const failA = failCursorWriteFor('CCONTRACT_A')
+    try {
+      await expect(fetchOnce('CCONTRACT_A')).rejects.toThrow(/Cursor write failed/)
+    } finally {
+      failA.mockRestore()
+    }
+    const failB = failCursorWriteFor('CCONTRACT_B')
+    try {
+      await expect(fetchOnce('CCONTRACT_B')).rejects.toThrow(/Cursor write failed/)
+    } finally {
+      failB.mockRestore()
+    }
+
+    const failures = getCursorWriteFailures()
+    expect(failures.get('CCONTRACT_A')?.error).toBe('disk full for CCONTRACT_A')
+    expect(failures.get('CCONTRACT_B')?.error).toBe('disk full for CCONTRACT_B')
+
+    // A's retry (same page refetched, events already folded) now persists
+    // its cursor: A's failure clears, B's stays.
+    getEventsMock.mockResolvedValueOnce({ events: [decodedEvent('joined', { member: 'GA', fee: '10' })], cursor: 'tok-a', latestLedger: 100_000 })
+    await fetchOnce('CCONTRACT_A')
+
+    expect(getCursorWriteFailure('CCONTRACT_A')).toBeNull()
+    expect(getCursorWriteFailure('CCONTRACT_B')?.error).toBe('disk full for CCONTRACT_B')
+  })
+
+  it('getCursorWriteFailures returns a snapshot that callers cannot mutate into module state', async () => {
+    getEventsMock.mockResolvedValueOnce({ events: [decodedEvent('joined', { member: 'GA', fee: '10' })], cursor: 'tok-a', latestLedger: 100_000 })
+    const spy = failCursorWriteFor('CCONTRACT_A')
+    try {
+      await expect(fetchOnce('CCONTRACT_A')).rejects.toThrow(/Cursor write failed/)
+    } finally {
+      spy.mockRestore()
+    }
+
+    const snapshot = getCursorWriteFailures() as Map<string, unknown>
+    snapshot.clear()
+    expect(getCursorWriteFailure('CCONTRACT_A')).not.toBeNull()
   })
 })
