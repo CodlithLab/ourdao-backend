@@ -69,4 +69,23 @@ describe('db/maintenance: runMaintenance', () => {
     // VACUUMs still all ran and succeeded.
     expect(result.tables.every((t) => t.ok)).toBe(true)
   })
+
+  it('calls delete_expired_failed_events during maintenance and prunes expired failed_events rows', async () => {
+    const calls: string[] = []
+    let deleted = false
+    const client = fakeClient(async (sql) => {
+      calls.push(sql)
+      if (sql === 'SELECT delete_expired_failed_events()') {
+        deleted = true
+        return { rowCount: 2 }
+      }
+      return { rowCount: 0 }
+    })
+
+    const result = await runMaintenance(client)
+
+    expect(calls).toContain('SELECT delete_expired_failed_events()')
+    expect(deleted).toBe(true)
+    expect(result.expiredFailedEventsError).toBeUndefined()
+  })
 })

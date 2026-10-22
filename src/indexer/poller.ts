@@ -594,7 +594,7 @@ async function persistQuarantineState(state: QuarantineState | null, escalating 
 }
 
 // Issue #174: Clean up expired failed_events rows (retention policy).
-async function cleanupExpiredFailedEvents(): Promise<void> {
+export async function cleanupExpiredFailedEvents(): Promise<void> {
   try {
     await pool.query('SELECT delete_expired_failed_events()')
   } catch (err) {
