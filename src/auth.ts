@@ -8,7 +8,7 @@ export const NONCE_TIMESTAMP_HEX_LEN = 12
 /** Random bytes after the prefix, so prefix + random is 64 hex chars. */
 const NONCE_RANDOM_BYTES = 26
 
-// Authentication failure counters (issue #183)
+// Authentication failure counters (issue #183, #403)
 export const authStats = {
   challengesIssued: 0,
   verificationsSucceeded: 0,
@@ -20,6 +20,25 @@ export const authStats = {
     malformedEncoding: 0,
     unsupportedAddressType: 0,
   },
+}
+
+export function getAuthStats() {
+  return {
+    challengesIssued: authStats.challengesIssued,
+    verificationsSucceeded: authStats.verificationsSucceeded,
+    verificationsFailed: { ...authStats.verificationsFailed },
+  }
+}
+
+export function resetAuthStats(): void {
+  authStats.challengesIssued = 0
+  authStats.verificationsSucceeded = 0
+  authStats.verificationsFailed.missingHeaders = 0
+  authStats.verificationsFailed.invalidNonce = 0
+  authStats.verificationsFailed.invalidSignature = 0
+  authStats.verificationsFailed.addressMismatch = 0
+  authStats.verificationsFailed.malformedEncoding = 0
+  authStats.verificationsFailed.unsupportedAddressType = 0
 }
 
 // Per-address failure tracking for exponential backoff (issue #184)
@@ -237,6 +256,7 @@ export class MemoryNonceStore implements NonceStore {
 
     // Track issue count per address
     this.addressIssueCounts.set(address, addressIssueCount + 1)
+    authStats.challengesIssued++
 
     logger?.debug(`[auth] Issued nonce for ${truncateAddress(address)} (${addressIssueCount + 1} outstanding)`)
 
@@ -336,11 +356,13 @@ export class PostgresNonceStore implements NonceStore {
     )
 
     if (result.rows.length > 0) {
+      authStats.challengesIssued++
       logger?.debug(`[auth] Issued nonce for ${truncateAddress(address)}`)
       return result.rows[0].nonce
     }
 
     // Should not reach here, but fall back to the generated nonce if insert failed
+    authStats.challengesIssued++
     return nonce
   }
 

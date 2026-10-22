@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Keypair } from '@stellar/stellar-sdk'
 import type { FastifyInstance } from 'fastify'
 import { buildServer } from '../src/api/server.js'
 import { config } from '../src/config.js'
@@ -22,8 +23,11 @@ describe('API: proposals, stats, events, admin/log', () => {
   afterAll(closeDb)
 
   it('GET /api/proposals/loan returns newest first', async () => {
+    const kp = Keypair.random()
+    const addr = kp.publicKey()
     await query(
-      `INSERT INTO loan_proposals (id, borrower, amount) VALUES (1, 'GA', 100), (2, 'GA', 200)`
+      `INSERT INTO loan_proposals (id, borrower, amount) VALUES (1, $1, 100), (2, $1, 200)`,
+      [addr],
     )
     const res = await app.inject({ method: 'GET', url: '/api/proposals/loan' })
     const body = res.json()
@@ -31,20 +35,60 @@ describe('API: proposals, stats, events, admin/log', () => {
     expect(body[0].tallies_weighted).toBe(false)
   })
 
-  it('GET /api/proposals/loan pages with ?before= and ?limit=', async () => {
+  it('GET /api/proposals/loan filters by status and borrower (issue #400)', async () => {
+    const kp1 = Keypair.random()
+    const addr1 = kp1.publicKey()
+    const kp2 = Keypair.random()
+    const addr2 = kp2.publicKey()
+
     await query(
-      `INSERT INTO loan_proposals (id, borrower, amount) VALUES (1, 'GA', 100), (2, 'GA', 200), (3, 'GA', 300)`
+      `INSERT INTO loan_proposals (id, borrower, amount, status) VALUES
+       (1, $1, 100, 'pending'),
+       (2, $1, 200, 'approved'),
+       (3, $2, 300, 'pending'),
+       (4, $2, 400, 'rejected')`,
+      [addr1, addr2],
     )
-    const first = await app.inject({ method: 'GET', url: '/api/proposals/loan?limit=2' })
-    expect(first.statusCode).toBe(200)
-    expect(first.json().map((p: { id: number }) => p.id)).toEqual([3, 2])
 
-    const next = await app.inject({ method: 'GET', url: '/api/proposals/loan?limit=2&before=2' })
-    expect(next.statusCode).toBe(200)
-    expect(next.json().map((p: { id: number }) => p.id)).toEqual([1])
+    // Filter by status
+    const pendingRes = await app.inject({ method: 'GET', url: '/api/proposals/loan?status=pending' })
+    expect(pendingRes.statusCode).toBe(200)
+    expect(pendingRes.json().map((p: { id: number }) => p.id)).toEqual([3, 1])
 
-    const bad = await app.inject({ method: 'GET', url: '/api/proposals/loan?before=abc' })
-    expect(bad.statusCode).toBe(400)
+    // Filter by borrower
+    const borrowerRes = await app.inject({ method: 'GET', url: `/api/proposals/loan?borrower=${addr1}` })
+    expect(borrowerRes.statusCode).toBe(200)
+    expect(borrowerRes.json().map((p: { id: number }) => p.id)).toEqual([2, 1])
+
+    // Filter by both borrower and status
+    const combinedRes = await app.inject({
+      method: 'GET',
+      url: `/api/proposals/loan?borrower=${addr1}&status=approved`,
+    })
+    expect(combinedRes.statusCode).toBe(200)
+    expect(combinedRes.json().map((p: { id: number }) => p.id)).toEqual([2])
+
+    // Reject invalid borrower address
+    const invalidRes = await app.inject({ method: 'GET', url: '/api/proposals/loan?borrower=not-an-address' })
+    expect(invalidRes.statusCode).toBe(400)
+  })
+
+  it('GET /api/proposals/loan/:id returns single proposal or 404 (issue #398)', async () => {
+    const kp = Keypair.random()
+    const addr = kp.publicKey()
+    await query(`INSERT INTO loan_proposals (id, borrower, amount, status) VALUES (42, $1, 500, 'pending')`, [addr])
+
+    const res = await app.inject({ method: 'GET', url: '/api/proposals/loan/42' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().id).toBe(42)
+    expect(res.json().borrower).toBe(addr)
+    expect(res.json().tallies_weighted).toBe(false)
+
+    const notFound = await app.inject({ method: 'GET', url: '/api/proposals/loan/999' })
+    expect(notFound.statusCode).toBe(404)
+
+    const invalid = await app.inject({ method: 'GET', url: '/api/proposals/loan/not-a-number' })
+    expect(invalid.statusCode).toBe(400)
   })
 
   it('GET /api/proposals/treasury returns newest first', async () => {
@@ -57,20 +101,36 @@ describe('API: proposals, stats, events, admin/log', () => {
     expect(body[0].tallies_weighted).toBe(false)
   })
 
-  it('GET /api/proposals/treasury pages with ?before= and ?limit=', async () => {
+  it('GET /api/proposals/treasury filters by status (issue #400)', async () => {
     await query(
-      `INSERT INTO treasury_proposals (id, amount, destination) VALUES (1, 100, 'GD'), (2, 200, 'GD'), (3, 300, 'GD')`
+      `INSERT INTO treasury_proposals (id, amount, destination, status) VALUES
+       (1, 100, 'GD1', 'pending'),
+       (2, 200, 'GD2', 'executed'),
+       (3, 300, 'GD3', 'pending')`,
     )
-    const first = await app.inject({ method: 'GET', url: '/api/proposals/treasury?limit=2' })
-    expect(first.statusCode).toBe(200)
-    expect(first.json().map((p: { id: number }) => p.id)).toEqual([3, 2])
+    const res = await app.inject({ method: 'GET', url: '/api/proposals/treasury?status=pending' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().map((p: { id: number }) => p.id)).toEqual([3, 1])
 
-    const next = await app.inject({ method: 'GET', url: '/api/proposals/treasury?limit=2&before=2' })
-    expect(next.statusCode).toBe(200)
-    expect(next.json().map((p: { id: number }) => p.id)).toEqual([1])
+    const executedRes = await app.inject({ method: 'GET', url: '/api/proposals/treasury?status=executed' })
+    expect(executedRes.statusCode).toBe(200)
+    expect(executedRes.json().map((p: { id: number }) => p.id)).toEqual([2])
+  })
 
-    const bad = await app.inject({ method: 'GET', url: '/api/proposals/treasury?before=xyz' })
-    expect(bad.statusCode).toBe(400)
+  it('GET /api/proposals/treasury/:id returns single proposal or 404 (issue #398)', async () => {
+    await query(`INSERT INTO treasury_proposals (id, amount, destination, status) VALUES (55, 1000, 'GD55', 'pending')`)
+
+    const res = await app.inject({ method: 'GET', url: '/api/proposals/treasury/55' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().id).toBe(55)
+    expect(res.json().destination).toBe('GD55')
+    expect(res.json().tallies_weighted).toBe(false)
+
+    const notFound = await app.inject({ method: 'GET', url: '/api/proposals/treasury/999' })
+    expect(notFound.statusCode).toBe(404)
+
+    const invalid = await app.inject({ method: 'GET', url: '/api/proposals/treasury/abc' })
+    expect(invalid.statusCode).toBe(400)
   })
 
   it('GET /api/stats aggregates across all domain tables', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { Keypair } from '@stellar/stellar-sdk'
-import { PostgresNonceStore, authenticateRequest } from '../src/auth.js'
+import { PostgresNonceStore, authenticateRequest, authStats, resetAuthStats } from '../src/auth.js'
 import { pool, query, queryOne } from '../src/db/index.js'
 import { closeDb, resetDb } from './db.js'
 
@@ -205,5 +205,14 @@ describe('PostgresNonceStore', () => {
 
   it('shutdown timer is unref\'d so it doesn\'t prevent shutdown', async () => {
     await expect(store.shutdown()).resolves.toBeUndefined()
+  })
+
+  it('increments authStats.challengesIssued when issuing nonces (issue #403)', async () => {
+    resetAuthStats()
+    const address = 'GBJCHUKZMTFSLOMNC7P4TS4VJJBTCYL3AESFVNUN3AHYJRULJLW7AUWQ'
+    await store.issue(address)
+    expect(authStats.challengesIssued).toBe(1)
+    await store.issue(address)
+    expect(authStats.challengesIssued).toBe(2)
   })
 })

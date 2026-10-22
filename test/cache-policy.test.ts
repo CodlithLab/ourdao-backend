@@ -144,5 +144,11 @@ describe('every route applies a named policy (issue #194)', () => {
     const live = await app.inject({ method: 'GET', url: '/api/interest' })
     expect(live.headers['cache-control']).toBe(CACHE_POLICIES['public-live'])
     expect(live.headers.etag).toBeTruthy()
+
+    // Issue #399: /api/loans cache-control respects before cursor
+    const loanHist = await app.inject({ method: 'GET', url: '/api/loans?before=5' })
+    expect(loanHist.headers['cache-control']).toBe(CACHE_POLICIES['public-historical'])
+    const loanLive = await app.inject({ method: 'GET', url: '/api/loans' })
+    expect(loanLive.headers['cache-control']).toBe(CACHE_POLICIES['public-live'])
   })
 })
