@@ -8,7 +8,7 @@ import { decodeEvent, type DecodedEvent } from '../stellar/events.js'
 import { applyEvent } from './handlers.js'
 import { DERIVED_TABLES, resetDaoTotals } from './derived-tables.js'
 import { REINDEX_LOCK_KEY } from './reindex.js'
-import { notifyStreamClientsAfterCommit, STREAM_CHANNELS, type StreamChannel } from '../api/stream.js'
+import { notifyStreamClientsAfterCommit, broadcastResyncToAllChannels, STREAM_CHANNELS, type StreamChannel } from '../api/stream.js'
 import { invalidateCache, invalidateMembersListCache, memberSummaryCacheKey } from '../cache/redis.js'
 import { getTracer } from '../telemetry.js'
 
@@ -939,8 +939,10 @@ export async function runIndexer(): Promise<void> {
             const cursor = await loadCursor(contractId)
             const reorgLedger = cursor?.last_ledger ?? 0
             try {
-              await notifyStreamClientsAfterCommit(STREAM_CHANNELS.loans, {
+              await broadcastResyncToAllChannels({
                 type: 'resync',
+                event: 'reorg_detected',
+                ledger: reorgLedger,
                 reorg_ledger: reorgLedger,
                 message: 'Ledger discontinuity detected',
                 timestamp: Date.now(),

@@ -918,6 +918,21 @@ export async function notifyStreamClientsAfterCommit(
 }
 
 /**
+ * Broadcast a resync notification across all active stream channels defined
+ * in STREAM_CHANNELS safely, ensuring individual channel failures do not prevent
+ * other channels from receiving the notification.
+ */
+export async function broadcastResyncToAllChannels(payload?: Record<string, unknown>): Promise<void> {
+  for (const channel of Object.values(STREAM_CHANNELS)) {
+    try {
+      await notifyStreamClientsAfterCommit(channel, payload)
+    } catch {
+      // Best-effort per channel; continue broadcasting to remaining channels.
+    }
+  }
+}
+
+/**
  * Like notifyStreamClients, but throws on over-long payloads so callers/tests
  * can assert a clean failure (issue #153). The indexer path keeps the soft
  * refuse-and-log behaviour above.

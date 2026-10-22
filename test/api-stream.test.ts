@@ -295,6 +295,48 @@ describe('Stream NOTIFY integration', () => {
       client.release()
     }
   })
+
+  it('broadcasts resync notifications across all active stream channels (members, loan_proposals, treasury_proposals, interest, loans)', async () => {
+    await resetDb()
+    const listenClient = await pool.connect()
+    const receivedChannels: string[] = []
+
+    try {
+      for (const channel of Object.values(STREAM_CHANNELS)) {
+        await listenClient.query(`LISTEN "${channel}"`)
+      }
+
+      listenClient.on('notification', (msg) => {
+        if (msg.channel) {
+          receivedChannels.push(msg.channel)
+        }
+      })
+
+      // Import broadcastResyncToAllChannels from stream.ts
+      const { broadcastResyncToAllChannels } = await import('../src/api/stream.js')
+      await broadcastResyncToAllChannels({
+        type: 'resync',
+        event: 'reorg_detected',
+        ledger: 100,
+      })
+
+      // Wait briefly for notifications to arrive
+      await new Promise((resolve) => setTimeout(resolve, 200))
+
+      for (const channel of Object.values(STREAM_CHANNELS)) {
+        expect(receivedChannels).toContain(channel)
+      }
+    } finally {
+      for (const channel of Object.values(STREAM_CHANNELS)) {
+        try {
+          await listenClient.query(`UNLISTEN "${channel}"`)
+        } catch {
+          /* ignore */
+        }
+      }
+      listenClient.release()
+    }
+  })
 })
 
 // Issue #160: clients can subscribe to a subset of channels.
