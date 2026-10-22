@@ -115,3 +115,78 @@ describe('indexer.page span (issue #288)', () => {
     expect(span.status.code).not.toBe(2) // SpanStatusCode.ERROR
   })
 })
+
+describe('API server telemetry bootstrap (issue #381)', () => {
+  const calls: string[] = []
+  const handlers = new Map<string, () => void>()
+
+  afterEach(() => {
+    vi.doUnmock('../src/telemetry.js')
+    vi.doUnmock('../src/db/migrate.js')
+    vi.doUnmock('../src/db/index.js')
+    vi.doUnmock('../src/api/server.js')
+    vi.doUnmock('../src/api/stream.js')
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it('initializes telemetry before startup and flushes it on graceful shutdown', async () => {
+    vi.resetModules()
+    calls.length = 0
+    handlers.clear()
+
+    vi.doMock('../src/telemetry.js', () => ({
+      initTelemetry: vi.fn(() => void calls.push('initTelemetry')),
+      shutdownTelemetry: vi.fn(async () => void calls.push('shutdownTelemetry')),
+    }))
+    vi.doMock('../src/db/migrate.js', () => ({
+      migrate: vi.fn(async () => void calls.push('migrate')),
+    }))
+    vi.doMock('../src/db/index.js', () => ({
+      pool: { end: vi.fn(async () => void calls.push('pool.end')) },
+    }))
+    vi.doMock('../src/api/server.js', () => ({
+      buildServer: vi.fn(async () => {
+        calls.push('buildServer')
+        return {
+          listen: vi.fn(async () => void calls.push('listen')),
+          close: vi.fn(async () => void calls.push('app.close')),
+          log: { info: vi.fn(), error: vi.fn() },
+        }
+      }),
+      shutdownNonceStore: vi.fn(async () => void calls.push('shutdownNonceStore')),
+    }))
+    vi.doMock('../src/api/stream.js', () => ({
+      drainStreamClients: vi.fn(async () => void calls.push('drainStreamClients')),
+      shutdownSharedListener: vi.fn(async () => void calls.push('shutdownSharedListener')),
+    }))
+
+    // Capture the entrypoint's signal handlers instead of registering them on
+    // the test process, and keep process.exit from killing the vitest worker.
+    const realOn = process.on.bind(process)
+    vi.spyOn(process, 'on').mockImplementation(((event: string, listener: () => void) => {
+      if (event === 'SIGTERM' || event === 'SIGINT') {
+        handlers.set(event, listener)
+        return process
+      }
+      return realOn(event, listener)
+    }) as typeof process.on)
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      calls.push('process.exit')
+    }) as typeof process.exit)
+
+    await import('../src/index.js')
+    await vi.waitFor(() => expect(handlers.has('SIGTERM')).toBe(true))
+
+    expect(calls[0]).toBe('initTelemetry')
+    expect(calls.indexOf('initTelemetry')).toBeLessThan(calls.indexOf('migrate'))
+    expect(calls).not.toContain('shutdownTelemetry')
+
+    handlers.get('SIGTERM')!()
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0))
+
+    expect(calls).toContain('shutdownTelemetry')
+    expect(calls.indexOf('pool.end')).toBeLessThan(calls.indexOf('shutdownTelemetry'))
+    expect(calls.indexOf('shutdownTelemetry')).toBeLessThan(calls.indexOf('process.exit'))
+  })
+})

@@ -3,11 +3,15 @@ import { migrate } from './db/migrate.js'
 import { pool } from './db/index.js'
 import { buildServer, shutdownNonceStore } from './api/server.js'
 import { shutdownSharedListener, drainStreamClients } from './api/stream.js'
-import { closeRedis } from './cache/redis.js'
+import { initTelemetry, shutdownTelemetry } from './telemetry.js'
 
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
 async function main(): Promise<void> {
+  // Issue #381: registered before anything else runs, matching src/worker.ts
+  // and OpenTelemetry's recommended Node.js bootstrap ordering — a no-op when
+  // OTEL_ENABLED is unset (the default), see src/telemetry.ts.
+  initTelemetry()
   await migrate()
   const app = await buildServer()
   await app.listen({ port: config.http.port, host: config.http.host })
@@ -60,6 +64,8 @@ async function main(): Promise<void> {
     await shutdownNonceStore()
     await closeRedis()
     await pool.end()
+    // Issue #381: flush buffered spans to the collector before exiting.
+    await shutdownTelemetry()
     app.log.info('shutdown complete')
     process.exit(0)
   }
