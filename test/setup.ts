@@ -53,6 +53,13 @@ try {
 // Best-effort cleanup when tests complete. This won't run if the process is
 // killed hard (SIGKILL), so a separate cleanup script (scripts/clean-test-schemas.ts)
 // handles orphaned schemas.
+import { afterAll } from 'vitest'
+import { closeRedis } from '../src/cache/redis.js'
+
+afterAll(async () => {
+  await closeRedis()
+})
+
 process.on('beforeExit', () => {
   pool.query(`DROP SCHEMA IF EXISTS "${testSchema}" CASCADE`).catch(() => {
     // Ignore errors during cleanup
