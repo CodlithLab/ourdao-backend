@@ -1,4 +1,5 @@
 import type { Client } from 'pg'
+import { cleanupExpiredFailedEvents } from '../indexer/poller.js'
 
 // Issue #279: periodic VACUUM ANALYZE + expired-nonce cleanup, run from
 // src/worker.ts alongside the indexer loop.
@@ -32,6 +33,7 @@ export interface MaintenanceResult {
   // already-expired row gets deleted by whichever sweep gets there first.
   expiredNoncesDeleted: number | null
   expiredNoncesError?: string
+  expiredFailedEventsError?: string
 }
 
 /** Run one table's `VACUUM (ANALYZE)`. Never throws — a failure on one table
@@ -75,12 +77,20 @@ export async function runMaintenance(client: Client): Promise<MaintenanceResult>
     expiredNoncesError = (err as Error).message
   }
 
+  let expiredFailedEventsError: string | undefined
+  try {
+    await cleanupExpiredFailedEvents()
+  } catch (err) {
+    expiredFailedEventsError = (err as Error).message
+  }
+
   return {
     startedAt,
     durationMs: Date.now() - runStart,
     tables,
     expiredNoncesDeleted,
     expiredNoncesError,
+    expiredFailedEventsError,
   }
 }
 
@@ -102,5 +112,10 @@ export function logMaintenanceResult(result: MaintenanceResult): void {
     console.error('[maintenance] expired auth_nonces cleanup failed:', result.expiredNoncesError)
   } else {
     console.log(`[maintenance] deleted ${result.expiredNoncesDeleted ?? 0} expired auth_nonces row(s)`)
+  }
+  if (result.expiredFailedEventsError) {
+    console.error('[maintenance] expired failed_events cleanup failed:', result.expiredFailedEventsError)
+  } else {
+    console.log('[maintenance] expired failed_events cleanup completed successfully')
   }
 }
