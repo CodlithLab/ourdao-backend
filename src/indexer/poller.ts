@@ -877,7 +877,8 @@ export async function fetchOnce(contractId: string): Promise<void> {
       break
     }
 
-    // Build next request using the same token computed above (issue #138)
+    // Build next request from the same token we persisted, so an interrupted
+    // drain resumes from exactly where we were reading (issue #138).
     currentRequest = { ...base, cursor: nextToken }
   }
 
