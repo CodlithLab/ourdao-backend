@@ -45,4 +45,35 @@ describe('test db harness', () => {
     expect(rows[0]?.joined_ledger).toBe(4200000)
     expect(typeof rows[0]?.joined_ledger).toBe('number')
   })
+
+  // Issue #393: delete_expired_failed_events() prunes resolved failed_events only and guards empty retention setting
+  it('delete_expired_failed_events() preserves unresolved events past retention and prunes resolved events', async () => {
+    // Insert one unresolved event older than 30 days
+    await query(
+      `INSERT INTO failed_events (event_id, symbol, ledger, error, created_at, resolved_at)
+       VALUES ('unresolved-old', 'loan_dflt', 10, 'error', now() - interval '40 days', NULL)`
+    )
+    // Insert one resolved event older than 30 days
+    await query(
+      `INSERT INTO failed_events (event_id, symbol, ledger, error, created_at, resolved_at)
+       VALUES ('resolved-old', 'loan_dflt', 20, 'error', now() - interval '40 days', now() - interval '35 days')`
+    )
+    // Insert one resolved event younger than 30 days
+    await query(
+      `INSERT INTO failed_events (event_id, symbol, ledger, error, created_at, resolved_at)
+       VALUES ('resolved-recent', 'loan_dflt', 30, 'error', now() - interval '10 days', now() - interval '5 days')`
+    )
+
+    await query('SELECT delete_expired_failed_events()')
+
+    const remaining = await query<{ event_id: string }>(
+      'SELECT event_id FROM failed_events ORDER BY event_id'
+    )
+    expect(remaining.map((r) => r.event_id)).toEqual(['resolved-recent', 'unresolved-old'])
+  })
+
+  it('delete_expired_failed_events() does not crash when app.failed_events_retention_days is empty string', async () => {
+    await query("SET app.failed_events_retention_days = ''")
+    await expect(query('SELECT delete_expired_failed_events()')).resolves.not.toThrow()
+  })
 })

@@ -352,8 +352,14 @@ async function ingestPage(events: rpc.Api.EventResponse[], lastLedger: number): 
       // transaction here, so needsFold accurately reflects "not yet folded"
       // (issue #119).
       if (needsFold) {
-        const channel = await applyEvent(client, ev)
-        if (channel) pendingNotifications.push({ channel, ev })
+        const channels = await applyEvent(client, ev)
+        if (channels) {
+          if (Array.isArray(channels)) {
+            for (const ch of channels) pendingNotifications.push({ channel: ch, ev })
+          } else {
+            pendingNotifications.push({ channel: channels, ev })
+          }
+        }
         await markFolded(client, ev.id)
       }
     }
@@ -479,7 +485,7 @@ async function ingestEventQuarantined(ev: DecodedEvent, lastLedger: number): Pro
   // Issue #169: set only once this event's own transaction has committed —
   // notified after `finally` releases the lock, on a separate connection,
   // never on `client` itself.
-  let committedChannel: StreamChannel | undefined
+  let committedChannels: StreamChannel[] = []
   try {
     const lockRes = await client.query<{ pg_try_advisory_lock: boolean }>(
       'SELECT pg_try_advisory_lock($1, hashtext(current_schema()))',
@@ -500,7 +506,7 @@ async function ingestEventQuarantined(ev: DecodedEvent, lastLedger: number): Pro
       const channel = await applyEvent(client, ev)
       await markFolded(client, ev.id)
       await client.query('COMMIT')
-      committedChannel = channel
+      committedChannels = channel ? (Array.isArray(channel) ? channel : [channel]) : []
     } catch (err) {
       await client.query('ROLLBACK')
       await recordQuarantinedEventSafely(ev, err)
@@ -516,7 +522,7 @@ async function ingestEventQuarantined(ev: DecodedEvent, lastLedger: number): Pro
     client.release()
   }
 
-  if (committedChannel) {
+  for (const committedChannel of committedChannels) {
     await invalidateMemberCachesAfterCommit(committedChannel, ev)
     await notifyStreamClientsAfterCommit(committedChannel, {
       symbol: ev.symbol,

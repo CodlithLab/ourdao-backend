@@ -1197,6 +1197,11 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
   // the rest.
   const MAX_BATCH_RESOLVE_IDS = 500
   app.post('/admin/failed-events/batch-resolve', async (req, reply) => {
+    const auth = await authenticateRequest(req.headers, nonceStore, undefined, req.log)
+    if (!auth.authenticated) {
+      return reply.code(auth.status).send({ error: auth.error || 'Authentication required' })
+    }
+
     const body = req.body as { ids?: unknown; resolution?: unknown; note?: unknown }
     const ids = body.ids
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -1226,6 +1231,19 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
       )
       return result.rowCount ?? 0
     })
+
+    await writeAuditLog(
+      auth.address,
+      'resolve_quarantined_event',
+      req.ip,
+      {
+        ids,
+        resolution,
+        resolved_count: resolvedCount,
+        note: note ?? null,
+      },
+      req.log
+    )
 
     return { resolved: resolvedCount }
   })

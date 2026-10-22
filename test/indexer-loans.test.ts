@@ -172,7 +172,8 @@ describe('indexer handlers: loans', () => {
       client,
       decodedEvent('loan_req', { id: 4, borrower: 'GBORROWER', amount: '1000', total_repayment: '1100' })
     )
-    await applyEvent(client, decodedEvent('loan_appr', { id: 4, borrower: 'GBORROWER', amount: '1000' }))
+    const chs = await applyEvent(client, decodedEvent('loan_appr', { id: 4, borrower: 'GBORROWER', amount: '1000' }))
+    expect(chs).toEqual([STREAM_CHANNELS.loan_proposals, STREAM_CHANNELS.loans])
 
     const proposals = await query<LoanProposalRow>('SELECT * FROM loan_proposals WHERE id = 4')
     expect(proposals[0]?.status).toBe('approved')

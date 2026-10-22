@@ -86,7 +86,7 @@ export type ReplayOutcome =
 export async function replayFailedEvent(eventId: string): Promise<ReplayOutcome> {
   const client: PoolClient = await pool.connect()
   let lockAcquired = false
-  let notifyChannel: StreamChannel | undefined
+  let notifyChannels: StreamChannel[] | undefined
 
   try {
     const lockRes = await client.query<{ pg_try_advisory_lock: boolean }>(
@@ -141,7 +141,7 @@ export async function replayFailedEvent(eventId: string): Promise<ReplayOutcome>
         [eventId]
       )
       await client.query('COMMIT')
-      notifyChannel = channel
+      notifyChannels = channel ? (Array.isArray(channel) ? channel : [channel]) : []
     } catch (err) {
       await client.query('ROLLBACK')
       const message = err instanceof Error ? err.message : String(err)
@@ -169,8 +169,10 @@ export async function replayFailedEvent(eventId: string): Promise<ReplayOutcome>
     client.release()
   }
 
-  if (notifyChannel) {
-    await notifyStreamClientsAfterCommit(notifyChannel, { symbol: 'replay', timestamp: Date.now() })
+  if (notifyChannels) {
+    for (const notifyChannel of notifyChannels) {
+      await notifyStreamClientsAfterCommit(notifyChannel, { symbol: 'replay', timestamp: Date.now() })
+    }
   }
   return { eventId, status: 'replayed' }
 }

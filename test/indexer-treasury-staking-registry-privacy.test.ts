@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { PoolClient } from 'pg'
 import { pool, query } from '../src/db/index.js'
 import { applyEvent } from '../src/indexer/handlers.js'
+import { STREAM_CHANNELS } from '../src/api/stream.js'
 import { closeDb, resetDb } from './db.js'
 import { decodedEvent } from './fixtures.js'
 import type { MemberRow, NotificationRow, TreasuryProposalRow } from '../src/types.js'
@@ -113,7 +114,8 @@ describe('indexer handlers: treasury', () => {
       decodedEvent('tre_prop', { id: 3, amount: '5000', destination: 'GDEST', private: false })
     )
     const execEv = decodedEvent('tre_exec', { id: 3, amount: '5000', destination: 'GDEST' })
-    await applyEvent(client, execEv)
+    const ch = await applyEvent(client, execEv)
+    expect(ch).toBe(STREAM_CHANNELS.treasury_proposals)
 
     const rows = await query<TreasuryProposalRow>('SELECT * FROM treasury_proposals WHERE id = 3')
     expect(rows[0]?.status).toBe('executed')
@@ -128,7 +130,8 @@ describe('indexer handlers: treasury', () => {
       client,
       decodedEvent('tre_prop', { id: 4, amount: '5000', destination: 'GDEST', private: true })
     )
-    await applyEvent(client, decodedEvent('revealed', { proposal_id: 4, voter: 'GV1', support: true }))
+    const ch = await applyEvent(client, decodedEvent('revealed', { proposal_id: 4, voter: 'GV1', support: true }))
+    expect(ch).toBe(STREAM_CHANNELS.treasury_proposals)
 
     const rows = await query<TreasuryProposalRow>('SELECT * FROM treasury_proposals WHERE id = 4')
     expect(rows[0]?.votes_for).toBe('1')
@@ -193,7 +196,8 @@ describe('indexer handlers: registry', () => {
 
   it('name_reg sets the name on an existing member', async () => {
     await applyEvent(client, decodedEvent('joined', { member: 'GALICE', fee: '10' }))
-    await applyEvent(client, decodedEvent('name_reg', { name: 'alice.our', owner: 'GALICE' }))
+    const ch = await applyEvent(client, decodedEvent('name_reg', { name: 'alice.our', owner: 'GALICE' }))
+    expect(ch).toBe(STREAM_CHANNELS.members)
     const rows = await query<MemberRow>('SELECT * FROM members WHERE address = $1', ['GALICE'])
     expect(rows[0]?.name).toBe('alice.our')
   })
