@@ -185,7 +185,7 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
   if (config.db.nonceStore === 'postgres') {
     nonceStore = new PostgresNonceStore(pool, app.log)
   } else {
-    nonceStore = new MemoryNonceStore()
+    nonceStore = new MemoryNonceStore(app.log)
   }
   // Issue #207: store the nonce store for shutdown access
   activeNonceStore = nonceStore

@@ -187,22 +187,29 @@ function truncateAddress(address: string): string {
   return `${address.slice(0, 4)}…${address.slice(-4)}`
 }
 
+
+export interface Logger {
+  debug(msg: string, ...args: unknown[]): void
+  warn(msg: string, ...args: unknown[]): void
+}
+
+function formatAddress(address: string): string {
+  return address.length > 8 ? address.slice(0, 4) + '...' + address.slice(-4) : address
+}
+
 // In-memory nonce store for development
 export class MemoryNonceStore implements NonceStore {
-  // Issue #180: support multiple nonces per address by keying on the nonce itself
-  private store = new Map<string, { address: string; expiresAt: number }>()
-  private addressIssueCounts = new Map<string, number>()
-  private readonly ttlMs: number
-  private readonly maxEntries: number
-  private readonly sweepIntervalMs: number
+  private store = new Map<string, { nonce: string; expiresAt: number }>()
+  private readonly log: Logger
+  private readonly TTL_MS = 5 * 60 * 1000 // 5 minutes
+  private readonly MAX_ENTRIES = 10000 // Hard cap on stored entries
   private sweepTimer: NodeJS.Timeout | null = null
   // Max outstanding nonces per address (issue #180)
   private readonly maxNoncesPerAddress = MAX_NONCES_PER_ADDRESS
 
-  constructor() {
-    this.ttlMs = config.db.nonceTtlMs
-    this.maxEntries = config.db.nonceMaxEntries
-    this.sweepIntervalMs = config.db.nonceSweepIntervalMs
+  constructor(logger?: Logger) {
+    this.log = logger ?? console
+    // Start periodic sweep of expired entries, unref'd so it doesn't hold process open
     this.startSweep()
   }
 
@@ -246,7 +253,7 @@ export class MemoryNonceStore implements NonceStore {
         // Nonce is still valid - return existing one
         // This prevents an attacker from invalidating a victim's nonce
         // and also prevents self-invalidation from multiple tabs
-        logger.debug('Returning existing nonce', { address: formatAddress(address), expiresInSeconds: Math.floor((existingEntry.expiresAt - now) / 1000) })
+        this.log.debug(`[auth] Returning existing nonce for ${formatAddress(address)}, expires in ${Math.floor((existingEntry.expiresAt - now) / 1000)}s`)
         return existingEntry.nonce
       } else {
         // Nonce has expired, clean it up
@@ -313,14 +320,15 @@ export class MemoryNonceStore implements NonceStore {
 // even with concurrent requests across multiple API instances.
 export class PostgresNonceStore implements NonceStore {
   private pool: Pool
-  private ttlMs: number
-  private cleanupIntervalMs: number
+  private readonly log: Logger
+  private readonly TTL_MS = 5 * 60 * 1000 // 5 minutes
   private cleanupTimer: NodeJS.Timeout | null = null
   // Background timer, not tied to any one request — falls back to this
   // base logger (e.g. `app.log`) rather than the per-call logger `issue()` gets.
   private readonly logger?: AuthLogger
 
-  constructor(pool: Pool, logger?: AuthLogger) {
+  constructor(pool: Pool, logger?: Logger) {
+    this.log = logger ?? console
     this.pool = pool
     this.logger = logger
     this.ttlMs = config.db.nonceTtlMs
@@ -336,7 +344,7 @@ export class PostgresNonceStore implements NonceStore {
         )
       } catch (error) {
         // Log but don't throw - cleanup failure shouldn't crash the process
-        this.logger?.warn(`[auth] expired-nonce cleanup failed: ${(error as Error).message}`)
+        this.log.warn(`[auth] expired-nonce cleanup failed: ${(error as Error).message}`)
       }
     }, this.cleanupIntervalMs)
     // Unref the timer so it doesn't prevent graceful shutdown
@@ -364,7 +372,7 @@ export class PostgresNonceStore implements NonceStore {
       // Nonce is still valid - return existing one
       // This prevents an attacker from invalidating a victim's nonce
       // and also prevents self-invalidation from multiple tabs
-      logger.debug('Returning existing nonce', { address: formatAddress(address) })
+      this.log.debug(`[auth] Returning existing nonce for ${formatAddress(address)}`)
       return existingResult.rows[0].nonce
     }
     if (count && Number(count.address_total) >= MAX_NONCES_PER_ADDRESS) {
