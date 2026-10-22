@@ -261,11 +261,36 @@ describe('API: POST /api/admin/failed-events/batch-resolve (issue #287)', () => 
     return rows.map((r) => r.id)
   }
 
-  it('resolves a batch of unresolved events in one call and returns the count', async () => {
+  async function buildAuthHeader(kp: ReturnType<typeof Keypair.random>): Promise<string> {
+    const challengeRes = await app.inject({
+      method: 'GET',
+      url: `/api/auth/challenge?address=${kp.publicKey()}`,
+    })
+    expect(challengeRes.statusCode).toBe(200)
+    const { nonce } = challengeRes.json<{ nonce: string }>()
+    const payload = Buffer.from(`${nonce}:${kp.publicKey()}`, 'utf8')
+    const signature = kp.sign(payload).toString('base64')
+    return `StellarSignature ${kp.publicKey()}:${signature}:${nonce}`
+  }
+
+  it('rejects unauthenticated requests with 401', async () => {
+    const ids = await insertFailedEvents(1)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/admin/failed-events/batch-resolve',
+      payload: { ids, resolution: 'resolved' },
+    })
+    expect(res.statusCode).toBe(401)
+  })
+
+  it('resolves a batch of unresolved events in one call and writes to admin_audit_log', async () => {
+    const admin = Keypair.random()
+    const authHeader = await buildAuthHeader(admin)
     const ids = await insertFailedEvents(3)
     const res = await app.inject({
       method: 'POST',
       url: '/api/admin/failed-events/batch-resolve',
+      headers: { authorization: authHeader },
       payload: { ids, resolution: 'resolved', note: 'reindexed and confirmed clean' },
     })
     expect(res.statusCode).toBe(200)
@@ -281,13 +306,28 @@ describe('API: POST /api/admin/failed-events/batch-resolve (issue #287)', () => 
       expect(row.resolution_note).toBe('reindexed and confirmed clean')
       expect(row.resolved_at).not.toBeNull()
     }
+
+    // Verify admin_audit_log entry
+    const auditRows = await query<{ admin_address: string; action: string; payload: Record<string, unknown> }>(
+      `SELECT admin_address, action, payload FROM admin_audit_log WHERE admin_address = $1`,
+      [admin.publicKey()]
+    )
+    expect(auditRows).toHaveLength(1)
+    expect(auditRows[0]!.action).toBe('resolve_quarantined_event')
+    expect(auditRows[0]!.payload.ids).toEqual(ids)
+    expect(auditRows[0]!.payload.resolution).toBe('resolved')
+    expect(auditRows[0]!.payload.resolved_count).toBe(3)
+    expect(auditRows[0]!.payload.note).toBe('reindexed and confirmed clean')
   })
 
   it('accepts "ignored" as a resolution with no note', async () => {
+    const admin = Keypair.random()
+    const authHeader = await buildAuthHeader(admin)
     const ids = await insertFailedEvents(1)
     const res = await app.inject({
       method: 'POST',
       url: '/api/admin/failed-events/batch-resolve',
+      headers: { authorization: authHeader },
       payload: { ids, resolution: 'ignored' },
     })
     expect(res.statusCode).toBe(200)
@@ -301,12 +341,15 @@ describe('API: POST /api/admin/failed-events/batch-resolve (issue #287)', () => 
   })
 
   it('excludes an already-resolved id from the count rather than erroring the batch', async () => {
+    const admin = Keypair.random()
+    const authHeader = await buildAuthHeader(admin)
     const ids = await insertFailedEvents(2)
     await query(`UPDATE failed_events SET resolved_at = now() WHERE id = $1`, [ids[0]])
 
     const res = await app.inject({
       method: 'POST',
       url: '/api/admin/failed-events/batch-resolve',
+      headers: { authorization: authHeader },
       payload: { ids, resolution: 'resolved' },
     })
     expect(res.statusCode).toBe(200)
@@ -314,17 +357,27 @@ describe('API: POST /api/admin/failed-events/batch-resolve (issue #287)', () => 
   })
 
   it('rejects an empty or missing ids array', async () => {
+    const admin = Keypair.random()
+    const authHeader = await buildAuthHeader(admin)
     for (const payload of [{ ids: [], resolution: 'resolved' }, { resolution: 'resolved' }]) {
-      const res = await app.inject({ method: 'POST', url: '/api/admin/failed-events/batch-resolve', payload })
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/admin/failed-events/batch-resolve',
+        headers: { authorization: authHeader },
+        payload,
+      })
       expect(res.statusCode).toBe(400)
     }
   })
 
   it('rejects a non-integer or negative id', async () => {
+    const admin = Keypair.random()
+    const authHeader = await buildAuthHeader(admin)
     for (const ids of [[1.5], [-1], ['1']]) {
       const res = await app.inject({
         method: 'POST',
         url: '/api/admin/failed-events/batch-resolve',
+        headers: { authorization: authHeader },
         payload: { ids, resolution: 'resolved' },
       })
       expect(res.statusCode).toBe(400)
@@ -332,20 +385,26 @@ describe('API: POST /api/admin/failed-events/batch-resolve (issue #287)', () => 
   })
 
   it('rejects a resolution outside resolved/ignored', async () => {
+    const admin = Keypair.random()
+    const authHeader = await buildAuthHeader(admin)
     const ids = await insertFailedEvents(1)
     const res = await app.inject({
       method: 'POST',
       url: '/api/admin/failed-events/batch-resolve',
+      headers: { authorization: authHeader },
       payload: { ids, resolution: 'archived' },
     })
     expect(res.statusCode).toBe(400)
   })
 
   it('is atomic: applies to all matched rows or none', async () => {
+    const admin = Keypair.random()
+    const authHeader = await buildAuthHeader(admin)
     const ids = await insertFailedEvents(5)
     const res = await app.inject({
       method: 'POST',
       url: '/api/admin/failed-events/batch-resolve',
+      headers: { authorization: authHeader },
       payload: { ids, resolution: 'resolved' },
     })
     expect(res.statusCode).toBe(200)

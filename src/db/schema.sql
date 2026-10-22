@@ -267,10 +267,11 @@ CREATE INDEX IF NOT EXISTS failed_events_ledger_created_at_idx ON failed_events 
 CREATE OR REPLACE FUNCTION delete_expired_failed_events() RETURNS void AS $$
 BEGIN
   DELETE FROM failed_events
-  WHERE created_at < now() - INTERVAL '1 day' * COALESCE(
-    current_setting('app.failed_events_retention_days', true)::int,
-    30
-  );
+  WHERE resolved_at IS NOT NULL
+    AND created_at < now() - INTERVAL '1 day' * COALESCE(
+      NULLIF(current_setting('app.failed_events_retention_days', true), '')::int,
+      30
+    );
 END;
 $$ LANGUAGE plpgsql;
 

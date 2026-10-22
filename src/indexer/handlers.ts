@@ -716,19 +716,20 @@ const handlers: Record<string, Handler> = {
 // Map event symbols to the stream channel a fold of that symbol touches
 // (issue #63). Read by `applyEvent` below to decide which channel to report
 // as changed — it no longer sends the NOTIFY itself (issue #169).
-const channelMap: Record<string, StreamChannel> = {
+const channelMap: Record<string, StreamChannel | StreamChannel[]> = {
   joined: STREAM_CHANNELS.members,
   exited: STREAM_CHANNELS.members,
   staked: STREAM_CHANNELS.members,
   unstaked: STREAM_CHANNELS.members,
   claimed: STREAM_CHANNELS.members,
+  name_reg: STREAM_CHANNELS.members,
 
   loan_req: STREAM_CHANNELS.loan_proposals,
   loan_edit: STREAM_CHANNELS.loan_proposals,
   loan_vote: STREAM_CHANNELS.loan_proposals,
   loan_wait: STREAM_CHANNELS.loan_proposals,
   loan_rej: STREAM_CHANNELS.loan_proposals,
-  loan_appr: STREAM_CHANNELS.loan_proposals,
+  loan_appr: [STREAM_CHANNELS.loan_proposals, STREAM_CHANNELS.loans],
   loan_exp: STREAM_CHANNELS.loan_proposals,
   loan_reject: STREAM_CHANNELS.loan_proposals,
   loan_disburse: STREAM_CHANNELS.loans,
@@ -741,20 +742,25 @@ const channelMap: Record<string, StreamChannel> = {
   treasury_reject: STREAM_CHANNELS.treasury_proposals,
   tre_wait: STREAM_CHANNELS.treasury_proposals,
   tre_rej: STREAM_CHANNELS.treasury_proposals,
+  tre_exec: STREAM_CHANNELS.treasury_proposals,
+  revealed: STREAM_CHANNELS.treasury_proposals,
 
   interest: STREAM_CHANNELS.interest,
 }
 
 /** Apply one decoded event's side effects. Unknown symbols are a no-op
  *  (the raw event is still persisted by the caller). Returns the stream
- *  channel this event's fold touches, if any — the caller sends the actual
+ *  channel(s) this event's fold touches, if any — the caller sends the actual
  *  NOTIFY once its own transaction has committed (issue #169), rather than
  *  this function sending it on `client`, the fold transaction's own
  *  connection. A NOTIFY that fails or errors mid-transaction on that same
  *  connection can otherwise poison it for Postgres's later statements in
  *  that same transaction, which the "log but don't throw" comment this
  *  replaced didn't account for. */
-export async function applyEvent(client: PoolClient, ev: DecodedEvent): Promise<StreamChannel | undefined> {
+export async function applyEvent(
+  client: PoolClient,
+  ev: DecodedEvent
+): Promise<StreamChannel | StreamChannel[] | undefined> {
   // A symbol the catalog doesn't know is a deliberate no-op (raw event already
   // stored by the caller) — but announce it once so a new contract event
   // can't quietly leave derived state incomplete (issue #39).

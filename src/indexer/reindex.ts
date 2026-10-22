@@ -134,7 +134,13 @@ export async function reindexFromEventLog(options?: ReindexOptions): Promise<{ e
           fields: namedFields(row.symbol, data),
         }
         const channel = await applyEvent(client, ev)
-        if (channel) touchedChannels.add(channel)
+        if (channel) {
+          if (Array.isArray(channel)) {
+            for (const ch of channel) touchedChannels.add(ch)
+          } else {
+            touchedChannels.add(channel)
+          }
+        }
         processed += 1
         lastLedger = row.ledger
         lastId = row.id
