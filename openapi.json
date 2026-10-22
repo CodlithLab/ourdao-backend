@@ -144,6 +144,30 @@
     },
     "/api/proposals/loan": {
       "get": {
+        "summary": "List loan proposals",
+        "tags": [
+          "Proposals"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Max rows to return (1-200, default 50)."
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "description": "Pagination cursor: return proposals with an ID strictly below this value."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Default Response"
@@ -200,6 +224,30 @@
     },
     "/api/proposals/treasury": {
       "get": {
+        "summary": "List treasury proposals",
+        "tags": [
+          "Proposals"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Max rows to return (1-200, default 50)."
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "description": "Pagination cursor: return proposals with an ID strictly below this value."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Default Response"

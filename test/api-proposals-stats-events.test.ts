@@ -25,6 +25,22 @@ describe('API: proposals, stats, events, admin/log', () => {
     expect(body[0].tallies_weighted).toBe(false)
   })
 
+  it('GET /api/proposals/loan pages with ?before= and ?limit=', async () => {
+    await query(
+      `INSERT INTO loan_proposals (id, borrower, amount) VALUES (1, 'GA', 100), (2, 'GA', 200), (3, 'GA', 300)`
+    )
+    const first = await app.inject({ method: 'GET', url: '/api/proposals/loan?limit=2' })
+    expect(first.statusCode).toBe(200)
+    expect(first.json().map((p: { id: number }) => p.id)).toEqual([3, 2])
+
+    const next = await app.inject({ method: 'GET', url: '/api/proposals/loan?limit=2&before=2' })
+    expect(next.statusCode).toBe(200)
+    expect(next.json().map((p: { id: number }) => p.id)).toEqual([1])
+
+    const bad = await app.inject({ method: 'GET', url: '/api/proposals/loan?before=abc' })
+    expect(bad.statusCode).toBe(400)
+  })
+
   it('GET /api/proposals/treasury returns newest first', async () => {
     await query(
       `INSERT INTO treasury_proposals (id, amount, destination) VALUES (1, 100, 'GD'), (2, 200, 'GD')`
@@ -33,6 +49,22 @@ describe('API: proposals, stats, events, admin/log', () => {
     const body = res.json()
     expect(body.map((p: { id: number }) => p.id)).toEqual([2, 1])
     expect(body[0].tallies_weighted).toBe(false)
+  })
+
+  it('GET /api/proposals/treasury pages with ?before= and ?limit=', async () => {
+    await query(
+      `INSERT INTO treasury_proposals (id, amount, destination) VALUES (1, 100, 'GD'), (2, 200, 'GD'), (3, 300, 'GD')`
+    )
+    const first = await app.inject({ method: 'GET', url: '/api/proposals/treasury?limit=2' })
+    expect(first.statusCode).toBe(200)
+    expect(first.json().map((p: { id: number }) => p.id)).toEqual([3, 2])
+
+    const next = await app.inject({ method: 'GET', url: '/api/proposals/treasury?limit=2&before=2' })
+    expect(next.statusCode).toBe(200)
+    expect(next.json().map((p: { id: number }) => p.id)).toEqual([1])
+
+    const bad = await app.inject({ method: 'GET', url: '/api/proposals/treasury?before=xyz' })
+    expect(bad.statusCode).toBe(400)
   })
 
   it('GET /api/stats aggregates across all domain tables', async () => {
