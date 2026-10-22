@@ -564,27 +564,20 @@ describe('migration end-state matches schema.sql', () => {
     const schemaSet = new Set(filtered(schemaSideIndexes))
     const notInSchema = filtered(migrationIndexes).filter((i) => !schemaSet.has(i))
 
-    // Known, pinned drift — not silently tolerated: the list is exact, so any
-    // *new* mismatch fails this test.
+    // Pinned drift, asserted exactly so that any *new* mismatch fails this
+    // test rather than hiding in a tolerated list.
     //
-    // 0015_events_ledger_id_idx.sql adds a composite (ledger, id) index that
-    // schema.sql never adopted, and no later migration drops it. It is
-    // therefore the only index in the replayed end state that schema.sql lacks,
-    // which means a database bootstrapped from schema.sql alone — the path
-    // src/db/migrate.ts takes on a fresh database — does not have the index the
-    // /api/events ledger-range query is written against
-    // (see src/api/routes/index.ts, the range-filter comment).
-    //
-    // Resolving it is a schema decision: adopting the index into schema.sql
-    // changes the curated, storage-costed index set that
-    // test/events-storage.test.ts asserts and docs/events-storage.md documents;
-    // the alternative is dropping it in a new migration. Both are maintainer
-    // calls, so this test pins the drift for review instead of hiding it — the
-    // assertion goes back to `[]` once either decision lands.
+    // This used to pin one entry: 0015_events_ledger_id_idx.sql adds a composite
+    // (ledger, id) index that schema.sql had never adopted, so a database
+    // bootstrapped from schema.sql alone (the path src/db/migrate.ts takes on a
+    // fresh database) was missing the index the /api/events ledger-range query
+    // is written against. schema.sql now carries it, so the two paths agree and
+    // the expectation is back to `[]`; it stays as a guard against the same
+    // drift returning.
     expect(
       notInSchema,
       `indexes present after migrations that are absent from schema.sql: ${notInSchema.join(', ')}`
-    ).toEqual(['events_ledger_id_idx'])
+    ).toEqual([])
 
     const migrationSet = new Set(filtered(migrationIndexes))
     const extra = filtered(schemaSideIndexes).filter((i) => !migrationSet.has(i))

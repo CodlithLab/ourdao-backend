@@ -1,0 +1,77 @@
+name: Branch protection
+
+# Issue #414: `main` had neither classic branch protection nor a repository
+# ruleset, so neither a green CI run nor a code-owner review was required
+# before a change landed on the default branch. The policy is committed as
+# data in `.github/rulesets/main.json`; these jobs keep that file honest.
+#
+# `definition` runs offline on any change to the policy and needs no
+# credentials. `live` compares the committed policy with what the repository
+# actually enforces and is manual on purpose: it only goes green once a
+# maintainer applies the ruleset with an admin token, so making it run on a
+# schedule today would just turn `main` red (docs/BRANCH_PROTECTION.md).
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/rulesets/**'
+      - '.github/CODEOWNERS'
+      - '.github/workflows/branch-protection.yml'
+      - 'scripts/branch-protection.ts'
+      - 'test/branch-protection.test.ts'
+      - 'docs/BRANCH_PROTECTION.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  definition:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Fails if the ruleset stops requiring a pull request, an approval, a
+      # code-owner review, the `build-and-test` (22 and 24) and `docker-build`
+      # checks, or if it starts allowing force-pushes, deletion, or bypass.
+      - name: Ruleset definition meets the policy
+        run: npm run protection:check
+
+  live:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: main enforces the committed policy
+        env:
+          # `github.token` can usually read rulesets; a maintainer can supply a
+          # PAT with administration read access as BRANCH_PROTECTION_TOKEN.
+          GITHUB_TOKEN: ${{ secrets.BRANCH_PROTECTION_TOKEN || github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: npm run protection:verify

@@ -471,7 +471,24 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
   })
 
   // --- Loan proposals ---
-  app.get('/proposals/loan', async (req, reply) => {
+  app.get('/proposals/loan', {
+    // Declared instead of hand-edited into `openapi.json`, so
+    // `npm run openapi:generate` reproduces the committed spec (issue #373).
+    schema: {
+      tags: ['Proposals'],
+      summary: 'List loan proposals',
+      querystring: {
+        type: 'object',
+        properties: {
+          limit: { type: 'string', description: 'Max rows to return (1-200, default 50).' },
+          before: {
+            type: 'string',
+            description: 'Pagination cursor: return proposals with an ID strictly below this value.',
+          },
+        },
+      },
+    },
+  }, async (req, reply) => {
     setCachePolicy(reply, 'public-live')
     const q = req.query as Record<string, unknown>
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
@@ -589,7 +606,24 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
   })
 
   // --- Treasury proposals ---
-  app.get('/proposals/treasury', async (req, reply) => {
+  app.get('/proposals/treasury', {
+    // Same reason as GET /proposals/loan above: the schema belongs here so the
+    // committed `openapi.json` is reproducible (issue #373).
+    schema: {
+      tags: ['Proposals'],
+      summary: 'List treasury proposals',
+      querystring: {
+        type: 'object',
+        properties: {
+          limit: { type: 'string', description: 'Max rows to return (1-200, default 50).' },
+          before: {
+            type: 'string',
+            description: 'Pagination cursor: return proposals with an ID strictly below this value.',
+          },
+        },
+      },
+    },
+  }, async (req, reply) => {
     setCachePolicy(reply, 'public-live')
     const q = req.query as Record<string, unknown>
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
