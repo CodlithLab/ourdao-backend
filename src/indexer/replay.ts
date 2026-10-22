@@ -5,6 +5,7 @@ import { markFolded } from './poller.js'
 import { REINDEX_LOCK_KEY } from './reindex.js'
 import { namedFields, type DecodedEvent } from '../stellar/events.js'
 import { notifyStreamClientsAfterCommit, type StreamChannel } from '../api/stream.js'
+import { invalidateMembersListCache, invalidateCache, memberSummaryCacheKey } from '../cache/redis.js'
 import { logger } from '../logger.js'
 
 /**
@@ -141,7 +142,14 @@ export async function replayFailedEvent(eventId: string): Promise<ReplayOutcome>
         [eventId]
       )
       await client.query('COMMIT')
-      notifyChannels = channel ? (Array.isArray(channel) ? channel : [channel]) : []
+notifyChannels = channel ? (Array.isArray(channel) ? channel : [channel]) : []
+      await invalidateMembersListCache()
+      if (['joined', 'staked', 'unstaked', 'claimed'].includes(ev.symbol)) {
+        const address = ev.fields['member'] ?? ev.fields['address']
+        if (typeof address === 'string' && address) {
+          await invalidateCache(memberSummaryCacheKey(address))
+        }
+      }
     } catch (err) {
       await client.query('ROLLBACK')
       const message = err instanceof Error ? err.message : String(err)
