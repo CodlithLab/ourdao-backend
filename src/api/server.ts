@@ -48,12 +48,12 @@ interface PackageJson {
   version: string
 }
 
-// Read once at module load — the version cannot change while the process
-// is running, so there is no reason for `/version` to hit the filesystem
-// on every request (issue #166). `/version` sits in the rate limiter's
-// allowList alongside `/health` and `/ready`, so it is otherwise the one
-// unthrottled endpoint that would do disk I/O per call.
-function readPackageVersion(): { version: string; error?: unknown } {
+// Stellar's nominal ledger close interval in seconds.
+// Used by the /ready endpoint to convert ledgers-behind into estimated lag time.
+const STELLAR_LEDGER_CLOSE_TIME_SECONDS = 5
+
+// Helper to read package.json version
+function readPackageVersion(): string {
   try {
     const __dirname = dirname(fileURLToPath(import.meta.url))
     const pkgPath = join(__dirname, '../../package.json')
@@ -445,9 +445,7 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
     const ledgersBehind = lastLedger != null && tipLedger != null && tipLedger > lastLedger
       ? tipLedger - lastLedger
       : null
-    const estimatedLagSeconds = ledgersBehind != null
-      ? ledgersBehind * config.stellar.ledgerCloseTimeSeconds
-      : null
+    const estimatedLagSeconds = ledgersBehind != null ? ledgersBehind * STELLAR_LEDGER_CLOSE_TIME_SECONDS : null
 
     if (isStale) {
       return reply.code(503).send({
