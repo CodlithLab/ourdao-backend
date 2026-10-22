@@ -495,8 +495,8 @@ export function isValidStellarAddress(address: string): boolean {
  * actually authenticated, never a separately re-parsed one (issue #70).
  */
 export type AuthResult =
-  | { authenticated: false; status: number; error: string }
-  | { authenticated: true; address: string }
+  | { authenticated: false; error: string; status: number }
+  | { authenticated: true; address: string; ed25519Address: string }
 
 // Authentication middleware function
 export async function authenticateRequest(
@@ -578,5 +578,5 @@ export async function authenticateRequest(
 
   logger?.info(`[auth] authentication succeeded: address=${truncateAddress(address)}`)
   failureTracker?.recordSuccess(address)
-  return { authenticated: true, address }
+  return { authenticated: true, address, ed25519Address: sig.ed25519Address }
 }

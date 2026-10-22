@@ -47,6 +47,30 @@ describe('API: notification mutations', () => {
     expect(res.statusCode).toBe(400)
   })
 
+  it('PATCH /api/notifications/:id/read supports muxed accounts verifying against canonical base address', async () => {
+    const muxedKeypair = Keypair.random()
+    const baseAddr = muxedKeypair.publicKey()
+    const muxedAddr = new (await import('@stellar/stellar-sdk')).MuxedAccount(new (await import('@stellar/stellar-sdk')).Account(baseAddr, '0'), '123').accountId()
+
+    const [row] = await query<{ id: number }>(
+      `INSERT INTO notifications (address, type, title, message) VALUES ($1, 'info', 't', 'm') RETURNING id`,
+      [baseAddr]
+    )
+
+    const challenge = await app.inject({ method: 'GET', url: `/api/auth/challenge?address=${muxedAddr}` })
+    const nonce = challenge.json().nonce as string
+    const signature = muxedKeypair.sign(Buffer.from(`${nonce}:${muxedAddr}`)).toString('base64')
+    const authHdr = `StellarSignature ${muxedAddr}:${signature}:${nonce}`
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/notifications/${row!.id}/read`,
+      headers: { authorization: authHdr },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().read).toBe(true)
+  })
+
   it('PATCH /api/notifications/:id/read marks that row read and 404s for a missing id', async () => {
     const [row] = await query<{ id: number }>(
       `INSERT INTO notifications (address, type, title, message) VALUES ($1, 'info', 't', 'm') RETURNING id`,
