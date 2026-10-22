@@ -476,7 +476,17 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     const q = req.query as Record<string, unknown>
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
     const l = limit(q.limit)
-    const rows = await query<LoanProposalRow>('SELECT * FROM loan_proposals ORDER BY id DESC LIMIT $1', [l])
+    const before = cursor(q.before)
+    if (invalidCursor(q.before)) return reply.code(400).send({ error: 'invalid before cursor' })
+    const conditions: string[] = []
+    const params: unknown[] = []
+    if (before !== null) {
+      params.push(before)
+      conditions.push(`id < $${params.length}`)
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    params.push(l)
+    const rows = await query<LoanProposalRow>(`SELECT * FROM loan_proposals ${where} ORDER BY id DESC LIMIT $${params.length}`, params)
     // The contract applies stake-weighted voting internally, but doesn't yet
     // publish `weight` on `loan_vote` — every tally here is an unweighted
     // headcount that can disagree with the on-chain result (issue #126).
@@ -584,7 +594,17 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     const q = req.query as Record<string, unknown>
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
     const l = limit(q.limit)
-    const rows = await query<TreasuryProposalRow>('SELECT * FROM treasury_proposals ORDER BY id DESC LIMIT $1', [l])
+    const before = cursor(q.before)
+    if (invalidCursor(q.before)) return reply.code(400).send({ error: 'invalid before cursor' })
+    const conditions: string[] = []
+    const params: unknown[] = []
+    if (before !== null) {
+      params.push(before)
+      conditions.push(`id < $${params.length}`)
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+    params.push(l)
+    const rows = await query<TreasuryProposalRow>(`SELECT * FROM treasury_proposals ${where} ORDER BY id DESC LIMIT $${params.length}`, params)
     // See the matching comment on GET /proposals/loan above (issue #126).
     return rows.map((r) => ({ ...r, tallies_weighted: false }))
   })
