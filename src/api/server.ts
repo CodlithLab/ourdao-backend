@@ -17,16 +17,9 @@ import { MemoryNonceStore, PostgresNonceStore, getAuthStats, type NonceStore } f
 import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
-import { server as rpcServer } from '../stellar/rpc.js'
-import { metricsRegistry } from './metrics.js'
-import { closeRedis } from '../cache/redis.js'
-
-interface ReorgHaltRow {
-  contract_id: string
-  last_ledger: number | null
-  detail: string
-  detected_at: string
-}
+// Stellar's nominal ledger close time, used to convert a lag in ledgers into
+// an estimated lag in seconds for the /ready readiness probe.
+const STELLAR_LEDGER_CLOSE_TIME_SECONDS = 5
 
 interface CursorRow {
   last_ledger: number | null
@@ -445,11 +438,7 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
     const ledgersBehind = lastLedger != null && tipLedger != null && tipLedger > lastLedger
       ? tipLedger - lastLedger
       : null
-// Stellar's nominal ledger close time, used to convert ledgers-behind
-// into an operator-friendly lag estimate on the /ready health endpoint.
-const LEDGER_CLOSE_TIME_SECONDS = 5
-
-    const estimatedLagSeconds = ledgersBehind != null ? ledgersBehind * LEDGER_CLOSE_TIME_SECONDS : null
+    const estimatedLagSeconds = ledgersBehind != null ? ledgersBehind * STELLAR_LEDGER_CLOSE_TIME_SECONDS : null
 
     if (isStale) {
       return reply.code(503).send({
