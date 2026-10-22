@@ -84,6 +84,7 @@ CREATE INDEX IF NOT EXISTS events_entity_id_idx ON events ((data->>0));
 -- Supports `GET /api/members/:address/activity`, which matches an address in
 -- any position of the `data` tuple with JSONB containment (`data @> '"G…"'`).
 CREATE INDEX IF NOT EXISTS events_data_gin_idx ON events USING GIN (data jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS events_ledger_id_idx ON events (ledger, id);
 
 CREATE TABLE IF NOT EXISTS members (
   address         TEXT PRIMARY KEY,

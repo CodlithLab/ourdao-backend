@@ -312,7 +312,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     if (!address) {
       return reply.code(400).send({ error: 'address query param is required' })
     }
-    
+
     // Validate address is a well-formed Stellar address (issue #65). Accept
     // both families verifySignature can resolve — ed25519 and muxed (issue
     // #116) — and reject contract (C…) and anything malformed.
@@ -331,7 +331,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
       throw error
     }
   })
-  
+
   // --- Members ---
   // `joined_ledger IS NOT NULL` filters out phantom rows — an address that
   // only ever appeared in a `name_reg`/`staked` event and never actually
@@ -426,7 +426,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     // uppercase form, so mixed-case lookups would return zero results.
     const rawAddress = req.params.address
     const address = rawAddress.toUpperCase()
-    
+
     if (!validAddress(address)) {
       return reply.code(400).send({ error: 'invalid Stellar address' })
     }
@@ -485,7 +485,42 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
   })
 
   // --- Loans (optional ?borrower= filter, ?before=<id> cursor) ---
-  app.get('/loans', async (req, reply) => {
+  app.get('/loans', {
+    schema: {
+      tags: ['Loans'],
+      summary: 'Array of loans',
+      response: {
+        200: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'integer' },
+              borrower: { type: 'string' },
+              amount: { type: 'string' },
+              outstanding: { type: 'string' },
+              total_repayment: { type: 'string' },
+              status: { type: 'string', enum: ['active', 'repaid', 'defaulted'] },
+              approved_ledger: { type: ['integer', 'null'] },
+              due_time: { type: ['string', 'null'] },
+              repaid_ledger: { type: ['integer', 'null'] },
+              defaulted_ledger: { type: ['integer', 'null'] },
+              updated_at: { type: 'string' },
+              interest_charge: { type: ['string', 'null'] },
+              repaid_amount: { type: ['string', 'null'] },
+              repayment_progress_bps: { type: ['integer', 'null'] },
+            },
+          },
+        },
+        400: {
+          type: 'object',
+          properties: {
+            error: { type: 'string' },
+          },
+        },
+      },
+    },
+  }, async (req, reply) => {
     setCachePolicy(reply, 'public-live')
     const q = req.query as Record<string, unknown>
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
@@ -568,7 +603,38 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
   })
 
   // --- Notifications for an address (optional ?before=<id> cursor) ---
-  app.get('/notifications', async (req, reply) => {
+  app.get('/notifications', {
+    schema: {
+      tags: ['Notifications'],
+      summary: 'Array of notifications',
+      response: {
+        200: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'integer' },
+              address: { type: 'string' },
+              type: { type: 'string', enum: ['success', 'error', 'warning', 'info'] },
+              title: { type: 'string' },
+              message: { type: 'string' },
+              ledger: { type: ['integer', 'null'] },
+              tx_hash: { type: ['string', 'null'] },
+              read: { type: 'boolean' },
+              event_id: { type: ['string', 'null'] },
+              created_at: { type: 'string' },
+            },
+          },
+        },
+        400: {
+          type: 'object',
+          properties: {
+            error: { type: 'string' },
+          },
+        },
+      },
+    },
+  }, async (req, reply) => {
     setCachePolicy(reply, 'private')
     const q = req.query as Record<string, unknown>
     if (typeof q.address !== 'string' || !q.address || !validAddress(q.address)) {
@@ -601,13 +667,43 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
         timeWindow: config.http.rateLimitWindowMs,
       },
     },
+    schema: {
+      tags: ['Events'],
+      summary: 'Paginated event feed',
+      response: {
+        200: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              ledger: { type: 'integer' },
+              closed_at: { type: 'string' },
+              contract_id: { type: 'string' },
+              symbol: { type: 'string' },
+              topics: {},
+              data: {},
+              tx_hash: { type: ['string', 'null'] },
+              decode_error: { type: ['string', 'null'] },
+              created_at: { type: 'string' },
+            },
+          },
+        },
+        400: {
+          type: 'object',
+          properties: {
+            error: { type: 'string' },
+          },
+        },
+      },
+    },
   }, async (req, reply) => {
     const q = req.query as Record<string, unknown>
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
     const l = limit(q.limit)
     const before = eventCursor(q.before)
     const after = eventCursor(q.after)
-    
+
     if (invalidEventCursor(q.before)) return reply.code(400).send({ error: 'invalid before cursor' })
     if (invalidEventCursor(q.after)) return reply.code(400).send({ error: 'invalid after cursor' })
     if (before !== null && after !== null) return reply.code(400).send({ error: 'cannot use before and after together' })
@@ -673,15 +769,15 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
         conditions.push(`ledger > $${params.length}`)
       }
     }
-    
+
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
     params.push(l)
-    
+
     const events = await query<EventRow>(
       `SELECT * FROM events ${where} ORDER BY ledger ${order}, id ${order} LIMIT $${params.length}`,
       params
     )
-    
+
     const response: { events: EventRow[], nextCursor?: string } = { events }
     const lastEvent = events[events.length - 1]
     if (lastEvent) {
@@ -716,7 +812,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     if (notification.address !== auth.address) {
       return reply.code(403).send({ error: 'Cannot modify notifications for another address' })
     }
-    
+
     const row = await queryOne<NotificationRow>(
       'UPDATE notifications SET read = true WHERE id = $1 RETURNING *',
       [id]
@@ -731,13 +827,13 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     if (typeof q.address !== 'string' || !q.address || !validAddress(q.address)) {
       return reply.code(400).send({ error: 'invalid Stellar address' })
     }
-    
+
     // Authenticate the request and verify the address matches
     const auth = await authenticateRequest(req.headers, nonceStore, q.address, req.log)
     if (!auth.authenticated) {
       return reply.code(auth.status).send({ error: auth.error || 'Authentication required' })
     }
-    
+
     const rows = await query<NotificationRow>(
       'UPDATE notifications SET read = true WHERE address = $1 AND read = false RETURNING id',
       [q.address]
@@ -796,9 +892,9 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
     const l = limit(q.limit)
     const before = cursor(q.before)
-    
+
     if (invalidCursor(q.before)) return reply.code(400).send({ error: 'invalid before cursor' })
-    
+
     setCachePolicy(reply, historicalOrLive(before !== null))
     // `?contract=<C...>` scopes to one deployment, same as /events (issue #16).
     const contract = typeof q.contract === 'string' && q.contract ? q.contract : null
@@ -827,9 +923,9 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     const l = limit(q.limit)
     const before = cursor(q.before)
     if (invalidCursor(q.before)) return reply.code(400).send({ error: 'invalid before cursor' })
-    
+
     setCachePolicy(reply, historicalOrLive(before !== null))
-    
+
     const params: unknown[] = []
     let where = ''
     if (before !== null) {
@@ -1311,11 +1407,11 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
       reorgDetected: row?.reorg_detected_at != null,
       reorgHalt: row?.reorg_detected_at != null
         ? {
-            detectedAt: new Date(row.reorg_detected_at).toISOString(),
-            contractId: row.reorg_contract_id ?? '',
-            lastLedger: row.reorg_last_ledger ?? null,
-            detail: row.reorg_detail ?? '',
-          }
+          detectedAt: new Date(row.reorg_detected_at).toISOString(),
+          contractId: row.reorg_contract_id ?? '',
+          lastLedger: row.reorg_last_ledger ?? null,
+          detail: row.reorg_detail ?? '',
+        }
         : null,
       // Issue #156: live SSE connection count for this process.
       connectedStreams: getConnectedStreamCount(),
@@ -1325,7 +1421,50 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     }
   }
 
-  app.get('/stats', async (_req, reply): Promise<DAOStats | { error: string }> => {
+  app.get('/stats', {
+    schema: {
+      tags: ['Stats'],
+      summary: 'DAO statistics',
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            totalMembers: { type: 'integer' },
+            activeMembers: { type: 'integer' },
+            totalLoanProposals: { type: 'integer' },
+            totalLoans: { type: 'integer' },
+            activeLoans: { type: 'integer' },
+            defaultedLoans: { type: 'integer' },
+            totalDefaultedValue: { type: 'string' },
+            totalTreasuryProposals: { type: 'integer' },
+            totalStaked: { type: 'string' },
+            totalContribution: { type: 'string' },
+            stakingRatio: { type: 'number' },
+            interestCollected: { type: 'string' },
+            principalLent: { type: 'string' },
+            principalRepaid: { type: 'string' },
+            valueDefaulted: { type: 'string' },
+            quarantinedEvents: { type: 'integer' },
+            connectedStreams: { type: 'integer' },
+            notificationFailures: { type: 'integer' },
+            reorgHalt: {
+              type: ['object', 'null'],
+              properties: {
+                reason: { type: 'string' },
+                detail: { type: 'string' },
+              },
+            },
+          },
+        },
+        503: {
+          type: 'object',
+          properties: {
+            error: { type: 'string' },
+          },
+        },
+      },
+    },
+  }, async (_req, reply): Promise<DAOStats | { error: string }> => {
     const ttl = config.http.statsCacheMs
     setCachePolicy(reply, 'public-live')
     // Issue #156: connectedStreams is live process state — always refresh it

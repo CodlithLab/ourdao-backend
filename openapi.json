@@ -153,9 +153,94 @@
     },
     "/api/loans": {
       "get": {
+        "summary": "Array of loans",
+        "tags": [
+          "Loans"
+        ],
         "responses": {
           "200": {
-            "description": "Default Response"
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "integer"
+                      },
+                      "borrower": {
+                        "type": "string"
+                      },
+                      "amount": {
+                        "type": "string"
+                      },
+                      "outstanding": {
+                        "type": "string"
+                      },
+                      "total_repayment": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "active",
+                          "repaid",
+                          "defaulted"
+                        ]
+                      },
+                      "approved_ledger": {
+                        "type": "integer",
+                        "nullable": true
+                      },
+                      "due_time": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "repaid_ledger": {
+                        "type": "integer",
+                        "nullable": true
+                      },
+                      "defaulted_ledger": {
+                        "type": "integer",
+                        "nullable": true
+                      },
+                      "updated_at": {
+                        "type": "string"
+                      },
+                      "interest_charge": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "repaid_amount": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "repayment_progress_bps": {
+                        "type": "integer",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -228,18 +313,147 @@
     },
     "/api/notifications": {
       "get": {
+        "summary": "Array of notifications",
+        "tags": [
+          "Notifications"
+        ],
         "responses": {
           "200": {
-            "description": "Default Response"
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "integer"
+                      },
+                      "address": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "success",
+                          "error",
+                          "warning",
+                          "info"
+                        ]
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "ledger": {
+                        "type": "integer",
+                        "nullable": true
+                      },
+                      "tx_hash": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "read": {
+                        "type": "boolean"
+                      },
+                      "event_id": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "created_at": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
     },
     "/api/events": {
       "get": {
+        "summary": "Paginated event feed",
+        "tags": [
+          "Events"
+        ],
         "responses": {
           "200": {
-            "description": "Default Response"
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "ledger": {
+                        "type": "integer"
+                      },
+                      "closed_at": {
+                        "type": "string"
+                      },
+                      "contract_id": {
+                        "type": "string"
+                      },
+                      "symbol": {
+                        "type": "string"
+                      },
+                      "topics": {},
+                      "data": {},
+                      "tx_hash": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "decode_error": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "created_at": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -559,9 +773,103 @@
     },
     "/api/stats": {
       "get": {
+        "summary": "DAO statistics",
+        "tags": [
+          "Stats"
+        ],
         "responses": {
           "200": {
-            "description": "Default Response"
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "totalMembers": {
+                      "type": "integer"
+                    },
+                    "activeMembers": {
+                      "type": "integer"
+                    },
+                    "totalLoanProposals": {
+                      "type": "integer"
+                    },
+                    "totalLoans": {
+                      "type": "integer"
+                    },
+                    "activeLoans": {
+                      "type": "integer"
+                    },
+                    "defaultedLoans": {
+                      "type": "integer"
+                    },
+                    "totalDefaultedValue": {
+                      "type": "string"
+                    },
+                    "totalTreasuryProposals": {
+                      "type": "integer"
+                    },
+                    "totalStaked": {
+                      "type": "string"
+                    },
+                    "totalContribution": {
+                      "type": "string"
+                    },
+                    "stakingRatio": {
+                      "type": "number"
+                    },
+                    "interestCollected": {
+                      "type": "string"
+                    },
+                    "principalLent": {
+                      "type": "string"
+                    },
+                    "principalRepaid": {
+                      "type": "string"
+                    },
+                    "valueDefaulted": {
+                      "type": "string"
+                    },
+                    "quarantinedEvents": {
+                      "type": "integer"
+                    },
+                    "connectedStreams": {
+                      "type": "integer"
+                    },
+                    "notificationFailures": {
+                      "type": "integer"
+                    },
+                    "reorgHalt": {
+                      "type": "object",
+                      "properties": {
+                        "reason": {
+                          "type": "string"
+                        },
+                        "detail": {
+                          "type": "string"
+                        }
+                      },
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
