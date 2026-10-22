@@ -552,55 +552,23 @@ export async function authenticateRequest(
     return { authenticated: false, status: 401, error: 'Missing authentication headers' }
   }
 
-  // Issue #266: Parse and validate nonce timestamp before querying database.
-  // Nonces are 64-character hex strings; the first 12 characters encode the
-  // unix milliseconds timestamp when the nonce was issued. Reject expired
-  // nonces immediately without hitting the database to mitigate replay DoS.
-  try {
-    const timestampHex = nonce.slice(0, NONCE_TIMESTAMP_HEX_LEN)
-    const timestamp = Number.parseInt(timestampHex, 16)
-    if (Number.isNaN(timestamp)) throw new Error('non-hex nonce timestamp')
-    const age = Date.now() - timestamp
-    const maxAge = 300000 // 300 seconds in milliseconds
-    
-    if (age > maxAge || age < 0) {
-      logger?.warn(`[auth] authentication failed: reason=expired_nonce address=${truncateAddress(address)} age_ms=${age}`)
-      authStats.verificationsFailed.invalidNonce++
-      failureTracker?.recordFailure(address)
-      return { authenticated: false, status: 401, error: 'Invalid or expired nonce' }
-    }
-  } catch (parseError) {
-    // Malformed nonce format — let it hit the database and fail there naturally
-    logger?.debug(`[auth] nonce timestamp parse failed, will verify via database: ${parseError}`)
-  }
-
-  // Check if this address is currently under backoff (issue #184)
-  if (failureTracker && !failureTracker.isAllowed(address)) {
-    const backoffMs = failureTracker.getRemainingBackoff(address)
-    logger?.warn(`[auth] authentication blocked: reason=backoff address=${truncateAddress(address)} backoff_ms=${backoffMs}`)
-    return { 
-      authenticated: false, 
-      status: 429, 
-      error: `Too many failed attempts. Try again in ${Math.ceil(backoffMs / 1000)} seconds` 
-    }
-  }
-
-  // Verify the signature first — consuming the nonce before this would let
-  // anyone who reads a victim's (non-secret, by design) challenge burn it
-  // with a garbage signature, denying the victim's real request (issue #115).
-  const sig = verifySignature(address, nonce, signature, logger)
+  // Verify the signature first. A bogus request must not consume the nonce,
+  // otherwise an attacker can burn a victim's live challenge and lock them out
+  // (issue #115). The nonce is only consumed once the signature is valid.
+  const sig = verifySignature(address, nonce, signature)
   if (!sig.ok) {
-    failureTracker?.recordFailure(address)
     return { authenticated: false, status: sig.status, error: sig.error }
   }
 
-  // Only now consume the nonce, so a bad signature never spends it.
+  // Check if the nonce is valid and hasn't been used
   const nonceValid = await nonceStore.consume(address, nonce)
   if (!nonceValid) {
-    logger?.warn(`[auth] authentication failed: reason=invalid_nonce address=${truncateAddress(address)}`)
-    authStats.verificationsFailed.invalidNonce++
-    failureTracker?.recordFailure(address)
     return { authenticated: false, status: 401, error: 'Invalid or expired nonce' }
+  }
+
+  // If a target address is provided, ensure it matches the authenticated address
+  if (targetAddress && targetAddress !== address) {
+    return { authenticated: false, status: 401, error: 'Cannot modify notifications for another address' }
   }
 
   // If a target address is provided, ensure it matches the authenticated address.
