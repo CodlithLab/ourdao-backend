@@ -13,7 +13,7 @@ import { pool } from '../db/index.js'
 import { registerCachePolicy } from './cache-policy.js'
 import { clientErrorHandler, frameworkErrors, registerErrorHandling } from './errors.js'
 import { registerRoutes } from './routes/index.js'
-import { MemoryNonceStore, PostgresNonceStore, getAuthStats, type NonceStore } from '../auth.js'
+import { MemoryNonceStore, PostgresNonceStore, AuthFailureTracker, getAuthStats, type NonceStore } from '../auth.js'
 import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
@@ -183,6 +183,8 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
   // Issue #207: store the nonce store for shutdown access
   activeNonceStore = nonceStore
 
+  const authFailureTracker = new AuthFailureTracker()
+
   // Issue #182: register shutdown hook to clean up nonce store timers on close
   app.addHook('onClose', async () => {
     await nonceStore.shutdown()
@@ -264,7 +266,7 @@ export async function buildServer(opts: BuildServerOptions = {}): Promise<Fastif
   })
 
   // ── Routes (including /api/stream — issue #158) ──
-  await app.register(registerRoutes, { prefix: '/api', nonceStore })
+  await app.register(registerRoutes, { prefix: '/api', nonceStore, authFailureTracker })
 
   // ── Liveness probe (issue #2, #403) — no DB round trip ──
   app.get('/health', async () => ({
