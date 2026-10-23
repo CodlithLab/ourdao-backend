@@ -634,7 +634,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     return { timeline: await entityTimeline(TREASURY_TIMELINE_SYMBOLS, id) }
   })
 
-  // --- Notifications for an address (optional ?before=<id> cursor) ---
+  // --- Notifications for an address (optional ?before=<id> cursor, optional ?unread=<boolean> filter)
   app.get('/notifications', {
     schema: {
       tags: ['Notifications'],
@@ -679,6 +679,14 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
 
     const conditions = ['address = $1']
     const params: unknown[] = [q.address]
+    if (q.unread !== undefined && q.unread !== null && q.unread !== '') {
+      if (q.unread !== 'true' && q.unread !== 'false' && q.unread !== true && q.unread !== false) {
+        return reply.code(400).send({ error: 'invalid unread parameter' })
+      }
+      const unreadVal = q.unread === 'true' || q.unread === true
+      params.push(unreadVal)
+      conditions.push(`read = $${params.length}`)
+    }
     if (before !== null) {
       params.push(before)
       conditions.push(`id < $${params.length}`)

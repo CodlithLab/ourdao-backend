@@ -47,6 +47,32 @@ describe('API: notification mutations', () => {
     expect(res.statusCode).toBe(400)
   })
 
+  it('GET /api/notifications filters by unread state', async () => {
+    await query(
+      `INSERT INTO notifications (id, address, type, title, message, read) VALUES
+       (20, $1, 'info', 'unread 1', 'm', false),
+       (21, $1, 'info', 'read 1', 'm', true),
+       (22, $1, 'info', 'unread 2', 'm', false)`,
+      [address]
+    )
+    const resUnread = await app.inject({ method: 'GET', url: `/api/notifications?address=${address}&unread=true` })
+    expect(resUnread.statusCode).toBe(200)
+    const unreadBody = resUnread.json()
+    expect(unreadBody).toHaveLength(2)
+    expect(unreadBody.map((n: { id: number }) => n.id)).toEqual([22, 20])
+
+    const resRead = await app.inject({ method: 'GET', url: `/api/notifications?address=${address}&unread=false` })
+    expect(resRead.statusCode).toBe(200)
+    const readBody = resRead.json()
+    expect(readBody).toHaveLength(1)
+    expect(readBody[0].id).toBe(21)
+  })
+
+  it('GET /api/notifications rejects an invalid unread parameter', async () => {
+    const res = await app.inject({ method: 'GET', url: `/api/notifications?address=${address}&unread=maybe` })
+    expect(res.statusCode).toBe(400)
+  })
+
   it('PATCH /api/notifications/:id/read supports muxed accounts verifying against canonical base address', async () => {
     const muxedKeypair = Keypair.random()
     const baseAddr = muxedKeypair.publicKey()
