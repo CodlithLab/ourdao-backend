@@ -90,6 +90,15 @@ export const DRAIN_STALL_DISCONNECT_MS = 30_000
 export const HEARTBEAT_RETRY_INITIAL_MS = 1_000
 export const HEARTBEAT_RETRY_MAX_MS = 16_000
 
+// Issue #370: when the shared LISTEN connection drops, the listener reconnects
+// on its own with exponential backoff (initial, doubling, capped at max)
+// instead of waiting for the next incoming GET /api/stream. Mutable so tests
+// can shrink the delays.
+export const sharedListenerReconnect = {
+  initialMs: 1_000,
+  maxMs: 30_000,
+}
+
 // Issue #157 / #156: transport-level backstop. A healthy connection always
 // has outbound traffic at least every 30s (the heartbeat), so this never
 // fires for one; a genuinely stalled socket (suspended mobile browser, slept
@@ -236,9 +245,14 @@ class SharedListener {
   private client: Client | null = null
   private connecting: Promise<void> | null = null
   private reconnecting = false
+  // Issue #370: automatic reconnect state.
+  private reconnectTimer: NodeJS.Timeout | null = null
+  private reconnectAttempt = 0
+  private stopped = false
 
   /** Idempotent: connects on first call, a no-op once connected. */
   async ensureStarted(): Promise<void> {
+    this.stopped = false
     if (this.client) return
     if (!this.connecting) {
       this.connecting = this.connect().finally(() => {
@@ -246,6 +260,35 @@ class SharedListener {
       })
     }
     return this.connecting
+  }
+
+  /**
+   * Issue #370: retry connect() with exponential backoff until it succeeds
+   * (or shutdown() is called), so the LISTEN channels are re-established even
+   * if no new SSE request ever arrives.
+   */
+  private scheduleReconnect(): void {
+    if (this.stopped || this.reconnectTimer || this.client || this.connecting) return
+    const delay = Math.min(
+      sharedListenerReconnect.initialMs * 2 ** this.reconnectAttempt,
+      sharedListenerReconnect.maxMs
+    )
+    this.reconnectAttempt++
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      if (this.stopped) return
+      this.ensureStarted().then(
+        () => {
+          this.reconnectAttempt = 0
+        },
+        (err) => {
+          console.error('[stream] shared listener reconnect failed, will retry:', err)
+          this.scheduleReconnect()
+        }
+      )
+    }, delay)
+    // Never keep the process alive just to retry.
+    this.reconnectTimer.unref?.()
   }
 
   private async connect(): Promise<void> {
@@ -308,7 +351,7 @@ class SharedListener {
     // server restarts or the connection drops, notify all connected SSE
     // clients so they know to reconnect.
     client.on('error', (err) => {
-      console.error('[stream] shared listener connection error, will reconnect on next request:', err)
+      console.error('[stream] shared listener connection error, reconnecting with backoff:', err)
       
       // Notify all connected SSE clients about the disconnect so they can
       // trigger a client-side reconnect. Send a disconnect message on all
@@ -338,6 +381,8 @@ class SharedListener {
         // Already gone.
       }).finally(() => {
         this.reconnecting = false
+        // Issue #370: don't wait for the next incoming request.
+        this.scheduleReconnect()
       })
     })
 
@@ -351,6 +396,13 @@ class SharedListener {
     while (this.reconnecting) {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
+    // Issue #370: stop any pending automatic reconnect.
+    this.stopped = true
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    this.reconnectAttempt = 0
     const client = this.client
     this.client = null
     if (!client) return
