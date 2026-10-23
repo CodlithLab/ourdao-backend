@@ -29,6 +29,30 @@
     },
     "/api/members": {
       "get": {
+        "summary": "Array of members",
+        "tags": [
+          "Members"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer"
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "description": "Maximum number of members to return"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "description": "Pagination cursor"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Default Response"
