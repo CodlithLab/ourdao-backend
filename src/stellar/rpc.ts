@@ -84,9 +84,16 @@ export async function getLatestLedgerInfo(): Promise<{ sequence: number; hash: s
  *  not as evidence of a fork; letting a hiccup on this best-effort check
  *  reject would otherwise wedge fetchOnce in permanent retry over a ledger
  *  whose events may already be safely folded and committed. */
+export async function getLedgers(serverInstance: rpc.Server, startLedger: number, limit = 10): Promise<rpc.Api.GetLedgersResponse> {
+  return withRateLimitRetry(
+    async () => serverInstance.getLedgers({ startLedger, pagination: { limit } }),
+    'getLedgers'
+  )
+}
+
 export async function getLedgerHash(sequence: number): Promise<string | null> {
   try {
-    const res = await server.getLedgers({ startLedger: sequence, pagination: { limit: 1 } })
+    const res = await getLedgers(server, sequence, 1)
     const ledger = res.ledgers[0]
     return ledger?.sequence === sequence ? ledger.hash : null
   } catch {
