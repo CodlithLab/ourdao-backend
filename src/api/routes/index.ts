@@ -25,7 +25,7 @@ import type {
   AdminAuditLogRow,
   AdminAuditAction,
 } from '../../types.js'
-import { authenticateRequest, classifyStellarAddress, NonceStoreCapacityError, type NonceStore } from '../../auth.js'
+import { authenticateRequest, classifyStellarAddress, NonceStoreCapacityError, type NonceStore, type AuthFailureTracker } from '../../auth.js'
 import { getConnectedStreamCount, getNotificationFailureCount, registerStreamEndpoint } from '../stream.js'
 import { historicalOrLive, setCachePolicy } from '../cache-policy.js'
 import { ConcurrencyGate, ConcurrencyLimitError } from '../load-shedding.js'
@@ -288,8 +288,8 @@ async function writeAuditLog(
   }
 }
 
-export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: NonceStore }): Promise<void> {
-  const { nonceStore } = opts
+export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: NonceStore; authFailureTracker?: AuthFailureTracker }): Promise<void> {
+  const { nonceStore, authFailureTracker }
   const historyCache = createHistoryCache()
   app.addHook('onClose', async () => historyCache.close())
 
@@ -829,7 +829,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
   // --- Mark a single notification as read ---
   app.patch<{ Params: { id: string } }>('/notifications/:id/read', async (req, reply) => {
     // First authenticate the request
-    const auth = await authenticateRequest(req.headers, nonceStore, undefined, req.log)
+    const auth = await authenticateRequest(req.headers, nonceStore, undefined, req.log, authFailureTracker)
     if (!auth.authenticated) {
       return reply.code(auth.status).send({ error: auth.error || 'Authentication required' })
     }
@@ -869,7 +869,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     }
 
     // Authenticate the request and verify the address matches
-    const auth = await authenticateRequest(req.headers, nonceStore, q.address, req.log)
+    const auth = await authenticateRequest(req.headers, nonceStore, q.address, req.log, authFailureTracker)
     if (!auth.authenticated) {
       return reply.code(auth.status).send({ error: auth.error || 'Authentication required' })
     }
