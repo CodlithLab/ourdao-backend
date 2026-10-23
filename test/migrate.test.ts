@@ -16,9 +16,10 @@
 import { readdir, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Client } from 'pg'
 import { afterAll, describe, expect, it } from 'vitest'
 import { pool } from '../src/db/index.js'
-import { migrate, assertNoDuplicateVersions } from '../src/db/migrate.js'
+import { migrate, assertNoDuplicateVersions, MIGRATION_LOCK_KEY } from '../src/db/migrate.js'
 import { closeDb, ensureSchema } from './db.js'
 
 afterAll(closeDb)
@@ -192,5 +193,58 @@ describe('0024_auth_nonces_rekey.sql against a database that predates it', () =>
       `SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'auth_nonces' ORDER BY indexname`
     )
     expect(idx.rows.map((r) => r.indexname)).toEqual(['auth_nonces_address_idx', 'auth_nonces_expires_at_idx', 'auth_nonces_new_pkey'])
+  })
+})
+
+// Issue #367: the migration lock is a two-key advisory lock scoped to the
+// schema being migrated, so parallel workers (one schema each) don't block
+// each other the way a database-wide single-key lock did.
+describe('migrate() advisory lock scope (#367)', () => {
+  async function holdLock(schemaExpr: string): Promise<Client> {
+    const holder = new Client({ connectionString: process.env.DATABASE_URL })
+    await holder.connect()
+    const res = await holder.query<{ ok: boolean }>(
+      `SELECT pg_try_advisory_lock($1, hashtext(${schemaExpr})) AS ok`,
+      [MIGRATION_LOCK_KEY]
+    )
+    expect(res.rows[0]?.ok).toBe(true)
+    return holder
+  }
+
+  it('is not blocked by a migration lock held for a different schema', async () => {
+    const holder = await holdLock(`'some_other_schema'`)
+    try {
+      const started = Date.now()
+      await expect(migrate()).resolves.toBeUndefined()
+      // The polling loop sleeps 100ms per miss; finishing well under the 30s
+      // timeout shows migrate() never had to wait on the other schema's lock.
+      expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      await holder.end()
+    }
+  })
+
+  it('still waits while the lock for its own schema is held, then proceeds when it is released', async () => {
+    const holder = await holdLock('current_schema()')
+    try {
+      let settled = false
+      const pending = migrate().then(() => {
+        settled = true
+      })
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      expect(settled).toBe(false)
+
+      await holder.query('SELECT pg_advisory_unlock($1, hashtext(current_schema()))', [MIGRATION_LOCK_KEY])
+      await pending
+      expect(settled).toBe(true)
+    } finally {
+      await holder.end()
+    }
+  })
+
+  it('releases its own lock when done, so the same schema can be migrated again', async () => {
+    await migrate()
+    const holder = await holdLock('current_schema()')
+    await holder.end()
   })
 })

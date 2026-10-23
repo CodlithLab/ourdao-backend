@@ -7,12 +7,19 @@ import { pool } from './index.js'
 const here = dirname(fileURLToPath(import.meta.url))
 const migrationsDir = join(here, 'migrations')
 
-// Arbitrary fixed key for a session-level advisory lock, scoped to this
-// database. The API and worker both call migrate() on startup; without a
-// lock they'd race to apply the same pending migration concurrently.
-// IF NOT EXISTS makes that harmless for schema.sql's CREATE statements, but
-// a real ALTER (see migrations/) is not safe to run twice in parallel.
-const MIGRATION_LOCK_KEY = 0x0d40_0000
+// Arbitrary fixed key for a session-level advisory lock. The API and worker
+// both call migrate() on startup; without a lock they'd race to apply the
+// same pending migration concurrently. IF NOT EXISTS makes that harmless for
+// schema.sql's CREATE statements, but a real ALTER (see migrations/) is not
+// safe to run twice in parallel.
+//
+// Issue #367: the lock is a two-key advisory lock — this key paired with
+// hashtext(current_schema()) — so it is scoped to the schema being migrated,
+// like the locks in src/indexer/reindex.ts and poller.ts. A single 64-bit key
+// is database-wide, which made parallel test workers (one schema each) block
+// each other. coalesce() keeps the lock usable if search_path resolves to no
+// schema (hashtext(NULL) is NULL, and the lock functions are strict).
+export const MIGRATION_LOCK_KEY = 0x0d40_0000
 
 /** Issue #256: Try to acquire the migration advisory lock with a timeout,
  *  using pg_try_advisory_lock in a polling loop. Returns true if the lock
@@ -27,7 +34,7 @@ async function acquireMigrationLockWithTimeout(
 
   while (Date.now() - startTime < timeoutMs) {
     const result = await client.query<{ pg_try_advisory_lock: boolean }>(
-      'SELECT pg_try_advisory_lock($1)',
+      `SELECT pg_try_advisory_lock($1, hashtext(coalesce(current_schema(), '')))`,
       [lockKey]
     )
     if (result.rows[0]?.pg_try_advisory_lock) {
@@ -170,7 +177,7 @@ export async function migrate(): Promise<void> {
       }
     } finally {
       await client.query('RESET statement_timeout')
-      await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY])
+      await client.query(`SELECT pg_advisory_unlock($1, hashtext(coalesce(current_schema(), '')))`, [MIGRATION_LOCK_KEY])
     }
   } finally {
     client.release()
