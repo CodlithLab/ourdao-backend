@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { config } from '../src/config.js'
 import { Account, Keypair, MuxedAccount, StrKey } from '@stellar/stellar-sdk'
 import {
   authenticateRequest,
@@ -98,7 +99,7 @@ describe('authenticateRequest (issue #70)', () => {
 
   it('returns the authenticated address on success', async () => {
     const res = await authenticateRequest(headersFor(G), alwaysValidNonce)
-    expect(res).toEqual({ authenticated: true, address: G })
+    expect(res).toEqual({ authenticated: true, address: G, ed25519Address: G })
   })
 
   it('never carries an address on failure — the union makes it a type error to read one', async () => {
@@ -279,6 +280,7 @@ describe('authenticateRequest — characterization (#72)', () => {
     expect(await authenticateRequest(headersFor(G, nonce), store)).toEqual({
       authenticated: true,
       address: G,
+      ed25519Address: G,
     })
     await store.shutdown()
   })
@@ -339,6 +341,47 @@ describe('authenticateRequest — characterization (#72)', () => {
     // The nonce must still be valid after the failed signature check.
     const second = await authenticateRequest(headersFor(G, nonce), store)
     expect(second).toMatchObject({ authenticated: true, address: G })
+    await store.shutdown()
+  })
+})
+
+// Issue #372: the nonce lifetime is configurable (NONCE_TTL_MS ->
+// config.db.nonceTtlMs). authenticateRequest must follow it rather than a
+// hardcoded 5 minutes: a longer TTL keeps nonces valid past 5 minutes, and a
+// shorter TTL rejects them sooner.
+describe('authenticateRequest — configurable nonce TTL (#372)', () => {
+  const originalTtl = config.db.nonceTtlMs
+
+  afterEach(() => {
+    config.db.nonceTtlMs = originalTtl
+    vi.useRealTimers()
+  })
+
+  function headersFor(nonce: string): Record<string, unknown> {
+    return { authorization: `StellarSignature ${G}:${sign(nonce, G)}:${nonce}` }
+  }
+
+  it('accepts a nonce older than 5 minutes when NONCE_TTL_MS is longer', async () => {
+    vi.useFakeTimers()
+    config.db.nonceTtlMs = 10 * 60 * 1000
+    const store = new MemoryNonceStore()
+    const nonce = await store.issue(G)
+    vi.advanceTimersByTime(6 * 60 * 1000)
+    expect(await authenticateRequest(headersFor(nonce), store)).toMatchObject({ authenticated: true, address: G })
+    await store.shutdown()
+  })
+
+  it('rejects a nonce younger than 5 minutes once a shorter NONCE_TTL_MS has passed', async () => {
+    vi.useFakeTimers()
+    config.db.nonceTtlMs = 60 * 1000
+    const store = new MemoryNonceStore()
+    const nonce = await store.issue(G)
+    vi.advanceTimersByTime(2 * 60 * 1000)
+    expect(await authenticateRequest(headersFor(nonce), store)).toMatchObject({
+      authenticated: false,
+      status: 401,
+      error: 'Invalid or expired nonce',
+    })
     await store.shutdown()
   })
 })
