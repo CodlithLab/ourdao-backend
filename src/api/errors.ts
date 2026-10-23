@@ -2,6 +2,7 @@ import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from
 import { randomUUID } from 'node:crypto'
 import { STATUS_CODES } from 'node:http'
 import type { Socket } from 'node:net'
+import { config } from '../config.js'
 
 /**
  * Stable, machine-readable error codes (issue #186). Clients branch on these,
@@ -147,6 +148,13 @@ export function classifyError(err: unknown): { status: number; error: string; co
   return { status: status5xx, error: 'internal server error', code: codeForStatus(status5xx), leak: true }
 }
 
+/** Issue #376: is `origin` permitted by the configured CORS_ORIGIN? */
+function isAllowedCorsOrigin(origin: string): boolean {
+  const allowed = config.http.corsOrigin
+  if (allowed === '*') return true
+  return allowed.split(',').some((o) => o.trim() === origin)
+}
+
 /**
  * Install the single error handler and 404 handler on a Fastify instance.
  * Call this before routes are registered so every child context inherits it —
@@ -166,10 +174,14 @@ export function registerErrorHandling(app: FastifyInstance): void {
   // @fastify/cors only runs for normal responses; 404s and unhandled errors
   // bypass it. Manually attach CORS headers here to every 4xx/5xx so frontend
   // clients receive actionable error messages instead of opaque CORS failures.
+  //
+  // Issue #376: only reflect an Origin that CORS_ORIGIN (config.http.corsOrigin)
+  // permits — the same rule @fastify/cors applies on normal responses. An
+  // untrusted Origin gets no Access-Control-Allow-Origin header at all.
   app.addHook('onSend', (req, reply, _payload, done) => {
     if (reply.statusCode >= 400 && !reply.hasHeader('Access-Control-Allow-Origin')) {
       const origin = req.headers.origin
-      if (origin) {
+      if (origin && isAllowedCorsOrigin(origin)) {
         reply.header('Access-Control-Allow-Origin', origin)
       }
     }
