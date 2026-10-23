@@ -187,29 +187,22 @@ function truncateAddress(address: string): string {
   return `${address.slice(0, 4)}…${address.slice(-4)}`
 }
 
-
-export interface Logger {
-  debug(msg: string, ...args: unknown[]): void
-  warn(msg: string, ...args: unknown[]): void
-}
-
-function formatAddress(address: string): string {
-  return address.length > 8 ? address.slice(0, 4) + '...' + address.slice(-4) : address
-}
-
 // In-memory nonce store for development
 export class MemoryNonceStore implements NonceStore {
-  private store = new Map<string, { nonce: string; expiresAt: number }>()
-  private readonly log: Logger
-  private readonly TTL_MS = 5 * 60 * 1000 // 5 minutes
-  private readonly MAX_ENTRIES = 10000 // Hard cap on stored entries
+  // Issue #180: support multiple nonces per address by keying on the nonce itself
+  private store = new Map<string, { address: string; expiresAt: number }>()
+  private addressIssueCounts = new Map<string, number>()
+  private readonly ttlMs: number
+  private readonly maxEntries: number
+  private readonly sweepIntervalMs: number
   private sweepTimer: NodeJS.Timeout | null = null
   // Max outstanding nonces per address (issue #180)
   private readonly maxNoncesPerAddress = MAX_NONCES_PER_ADDRESS
 
-  constructor(logger?: Logger) {
-    this.log = logger ?? console
-    // Start periodic sweep of expired entries, unref'd so it doesn't hold process open
+  constructor() {
+    this.ttlMs = config.db.nonceTtlMs
+    this.maxEntries = config.db.nonceMaxEntries
+    this.sweepIntervalMs = config.db.nonceSweepIntervalMs
     this.startSweep()
   }
 
@@ -244,21 +237,9 @@ export class MemoryNonceStore implements NonceStore {
   }
 
   async issue(address: string, log?: LoggerLike): Promise<string> {
-    const now = Date.now()
-    
-    // Check if we already have an unexpired nonce for this address
-    const existingEntry = this.store.get(address)
-    if (existingEntry) {
-      if (existingEntry.expiresAt > now) {
-        // Nonce is still valid - return existing one
-        // This prevents an attacker from invalidating a victim's nonce
-        // and also prevents self-invalidation from multiple tabs
-        this.log.debug(`[auth] Returning existing nonce for ${formatAddress(address)}, expires in ${Math.floor((existingEntry.expiresAt - now) / 1000)}s`)
-        return existingEntry.nonce
-      } else {
-        // Nonce has expired, clean it up
-        this.store.delete(address)
-      }
+    // Check if we're at overall capacity to prevent DoS
+    if (this.store.size >= this.maxEntries) {
+      throw new NonceStoreCapacityError()
     }
 
     // Check per-address nonce limit (issue #180)
@@ -320,15 +301,14 @@ export class MemoryNonceStore implements NonceStore {
 // even with concurrent requests across multiple API instances.
 export class PostgresNonceStore implements NonceStore {
   private pool: Pool
-  private readonly log: Logger
-  private readonly TTL_MS = 5 * 60 * 1000 // 5 minutes
+  private ttlMs: number
+  private cleanupIntervalMs: number
   private cleanupTimer: NodeJS.Timeout | null = null
   // Background timer, not tied to any one request — falls back to this
   // base logger (e.g. `app.log`) rather than the per-call logger `issue()` gets.
   private readonly logger?: AuthLogger
 
-  constructor(pool: Pool, logger?: Logger) {
-    this.log = logger ?? console
+  constructor(pool: Pool, logger?: AuthLogger) {
     this.pool = pool
     this.logger = logger
     this.ttlMs = config.db.nonceTtlMs
@@ -344,7 +324,7 @@ export class PostgresNonceStore implements NonceStore {
         )
       } catch (error) {
         // Log but don't throw - cleanup failure shouldn't crash the process
-        this.log.warn(`[auth] expired-nonce cleanup failed: ${(error as Error).message}`)
+        this.logger?.warn(`[auth] expired-nonce cleanup failed: ${(error as Error).message}`)
       }
     }, this.cleanupIntervalMs)
     // Unref the timer so it doesn't prevent graceful shutdown
@@ -361,19 +341,16 @@ export class PostgresNonceStore implements NonceStore {
   }
 
   async issue(address: string, log?: LoggerLike): Promise<string> {
-    // First, check if there's an existing unexpired nonce
-    const existingResult = await this.pool.query(
-      `SELECT nonce FROM auth_nonces 
-       WHERE address = $1 AND expires_at > now()`,
+    const counts = await this.pool.query<{ total: string; address_total: string }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE expires_at > now()) AS total,
+         COUNT(*) FILTER (WHERE expires_at > now() AND address = $1) AS address_total
+       FROM auth_nonces`,
       [address]
     )
-    
-    if (existingResult.rows.length > 0) {
-      // Nonce is still valid - return existing one
-      // This prevents an attacker from invalidating a victim's nonce
-      // and also prevents self-invalidation from multiple tabs
-      this.log.debug(`[auth] Returning existing nonce for ${formatAddress(address)}`)
-      return existingResult.rows[0].nonce
+    const count = counts.rows[0]
+    if (count && Number(count.total) >= config.db.nonceMaxEntries) {
+      throw new NonceStoreCapacityError()
     }
     if (count && Number(count.address_total) >= MAX_NONCES_PER_ADDRESS) {
       throw new NonceStoreCapacityError(`Too many outstanding nonces for ${truncateAddress(address)}`)
