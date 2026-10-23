@@ -524,7 +524,7 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     return { ...proposal, tallies_weighted: false }
   })
 
-  // --- Loans (optional ?borrower= filter, ?before=<id> cursor) ---
+  // --- Loans (optional ?borrower= filter, ?status= filter, ?before=<id> cursor) ---
   app.get('/loans', async (req, reply) => {
     const q = req.query as Record<string, unknown>
     if (invalidLimit(q.limit)) return reply.code(400).send({ error: 'invalid limit parameter' })
@@ -540,11 +540,22 @@ export async function registerRoutes(app: FastifyInstance, opts: { nonceStore: N
     }
     const borrower = typeof q.borrower === 'string' && q.borrower ? q.borrower : null
 
+    if (q.status !== undefined && q.status !== null && q.status !== '') {
+      if (typeof q.status !== 'string' || !['active', 'repaid', 'defaulted'].includes(q.status)) {
+        return reply.code(400).send({ error: 'invalid status parameter' })
+      }
+    }
+    const status = typeof q.status === 'string' && q.status ? q.status : null
+
     const conditions: string[] = []
     const params: unknown[] = []
     if (borrower) {
       params.push(borrower)
       conditions.push(`borrower = $${params.length}`)
+    }
+    if (status) {
+      params.push(status)
+      conditions.push(`status = $${params.length}`)
     }
     if (before !== null) {
       params.push(before)
